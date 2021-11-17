@@ -1,0 +1,123 @@
+---
+title: "Alternative Analyses"
+author: "Examining individual learning patterns using GLMMs"
+date: "Commins et al."
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(readxl)
+library(hnp)
+library(multcomp)
+library(lme4)
+
+fnp <- read_csv("face_names_in_person.csv")
+fno <- read_xlsx("face_names_online.xlsx")
+vnt <- read_csv("virtual_navigation_task.csv")
+shq <- read_csv("sea_hero_quest.csv")
+
+fnp$Ps <- as.factor(fnp$Ps)
+fnp$FN <- as.factor(fnp$FN)
+fnp$Trial <- as.factor(fnp$Trial)
+
+fno$Ps <- as.factor(fno$Ps)
+fno$FN <- as.factor(fno$FN)
+fno$Trial <- as.factor(fno$Trial)
+
+vnt$Ps <- as.factor(vnt$Ps)
+vnt$Trial <- as.factor(vnt$Trial)
+
+shq$Age <- as.factor(shq$Age)
+shq$Ps <- as.factor(shq$Ps)
+shq$Trial <- as.factor(shq$Trial)
+```
+
+## Face-Names Pairs Task (in Person)
+
+_Mixed Factorial ANOVA_
+
+```{r, message = FALSE, warning = FALSE}
+fit <- aov(Score ~ Trial * FN + Error(FN:Ps), data = fnp)
+summary(fit)
+
+hnp(fit)
+```
+
+_Post Hoc_
+
+```{r, message = FALSE, warning = FALSE}
+glht(model = lmer(Score ~ Trial * FN + (1 | FN:Ps), data = fnp),
+     linfct = mcp(Trial = "Tukey")) %>%
+  summary
+
+fnp$Trial_FN <- with(fnp, Trial:FN)
+glht(model = lmer(Score ~ Trial_FN + (1 | FN:Ps), data = fnp),
+     linfct = mcp(Trial_FN = "Tukey")) %>%
+  summary
+```
+
+## Face-Names Pairs Task (Online)
+
+_Mixed Factorial ANOVA_
+
+```{r, message = FALSE, warning = FALSE}
+fit <- aov(Score ~ Trial * FN + Error(FN:Ps), data = fno)
+summary(fit)
+
+hnp(fit)
+```
+
+_Post Hoc_
+
+```{r, message = FALSE, warning = FALSE}
+glht(model = lmer(Score ~ Trial * FN + (1 | FN:Ps), data = fno),
+     linfct = mcp(Trial = "Tukey")) %>%
+  summary
+
+fno$Trial_FN <- with(fno, Trial:FN)
+glht(model = lmer(Score ~ Trial_FN + (1 | FN:Ps), data = fno),
+     linfct = mcp(Trial_FN = "Tukey")) %>%
+  summary
+```
+
+## Virtual Navigation Task
+
+_Repeated Measures ANOVA_
+
+```{r, message = FALSE, warning = FALSE}
+fit <- aov(Score ~ Trial + Error(Ps), data = vnt)
+summary(fit)
+```
+
+_Post Hoc_
+
+```{r, message = FALSE, warning = FALSE}
+glht(model = lmer(Score ~ Trial + (1 | Ps), data = vnt),
+     linfct = mcp(Trial = "Tukey")) %>%
+  summary
+```
+
+## Sea Hero Quest
+
+_Mixed Factorial ANOVA_
+
+```{r, message = FALSE, warning = FALSE}
+fit <- aov(Score ~ Trial * Age + Error(Age:Ps), data = shq)
+summary(fit)
+```
+
+_Post Hoc_
+
+```{r, message = FALSE, warning = FALSE}
+glht(model = lmer(Score ~ Trial * Age + (1 | Age:Ps), data = shq),
+     linfct = mcp(Trial = "Tukey")) %>%
+  summary
+
+shq$Trial_Age <- with(shq, Trial:Age)
+glht(model = lmer(Score ~ Trial_Age + (1 | Age:Ps), data = shq),
+     linfct = mcp(Trial_Age = "Tukey")) %>%
+  summary
+```
