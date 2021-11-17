@@ -1,0 +1,657 @@
+---
+title: "Face-Names Pairs Test (Online)"
+author: "Examining individual learning patterns using GLMMs"
+date: "Commins et al."
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+sumPartition <- function(dat,z){
+  k <-length(unique(z))
+  nobs <- tapply(1:nrow(dat),z,length)
+  withinSS <- tapply(1:nrow(dat),z,function(i){
+    if (length(i)==1) 0
+    else {x<- dat[i,]
+    xm <- scale(x, scale=F)
+    sum(xm^2)
+    }
+  })
+  aveD <- tapply(1:nrow(dat),z,function(i){
+    if (length(i)==1) 0
+    else {x<- dat[i,]
+    xm <- scale(x, scale=F)
+    xm <- apply(xm, 1, function(y) sqrt(sum(y^2)))
+    mean(xm)
+    }
+  })
+  
+  maxD <- tapply(1:nrow(dat),z,function(i){
+    if (length(i)==1) 0
+    else {x<- dat[i,]
+    xm <- scale(x, scale=F)
+    xm <- apply(xm, 1, function(y) sqrt(sum(y^2)))
+    max(xm)
+    }
+  })
+  
+  part<- data.frame("N.obs"=nobs, "Within clus SS" = withinSS, "Ave dist  Centroid" = aveD,
+                    "Max dist centroid" =maxD)
+  rownames(part)<- paste("Cluster", 1:k)
+  
+  return(part)	
+}
+
+library(hnp)
+library(lme4)
+library(tidyverse)
+library(ggplot2)
+library(readxl)
+library(ggrepel)
+library(aplpack)
+library(car)
+library(sp)
+library(ape)
+
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+
+dat <- read_excel("face_names_online.xlsx")
+
+dat$Ps <- as.factor(dat$Ps)
+dat$FN <- as.factor(dat$FN)
+```
+
+## Exploratory analysis
+
+```{r, warning = FALSE, message = FALSE, echo = FALSE}
+dat %>%
+  ggplot(aes(x = Trial, y = Score/total * 100)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .5) +
+  xlab("Trial") +
+  ylab("Score (%)") +
+  geom_smooth() +
+  ylim(0, 100) +
+  facet_wrap(~ FN)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score/total * 100, colour = FN)) +
+  theme_bw() +
+  xlab("Trial") +
+  ylab("Score (%)") +
+  geom_smooth(se = FALSE) +
+  ylim(0, 100)
+```
+
+## Modelling
+
+We fitted a binomial generalized linear mixed model. We included a different linear effect of Trial per FN class in the linear predictor, and random intercepts and slopes per individual. Below we present the estimated coefficients, estimated variance-covariance matrix and curve.
+
+```{r, echo = FALSE}
+fit1 <- glmer(cbind(Score, total - Score) ~ Trial * FN +
+                (Trial || FN:Ps),
+              family = binomial,
+              data = dat)
+summary(fit1)
+
+fit2 <- glmer(cbind(Score, total - Score) ~ Trial * FN +
+               (1 | FN:Ps),
+             family = binomial,
+             data = dat)
+
+anova(fit1, fit2, test = "Chisq")
+
+drop1(fit1, test = "Chisq")
+
+fit <- glmer(cbind(Score, total - Score) ~ 0 + FN + Trial : FN +
+               (Trial || FN:Ps),
+             family = binomial,
+             data = dat)
+
+beta_hat <- fixef(fit)
+V <- vcov(fit)
+dat_pred <- expand.grid(Trial = seq(1, 4, length = 200),
+                        FN = levels(dat$FN)) %>%
+  as_tibble
+X_pred <- model.matrix(~ 0 + FN + Trial : FN, data = dat_pred)
+dat_pred$pred <- plogis(X_pred %*% beta_hat) %>% as.numeric
+se_pred <- sqrt(diag(X_pred %*% V %*% t(X_pred))) %>% as.numeric
+dat_pred$lower <- plogis(X_pred %*% beta_hat + qnorm(.025) * se_pred) %>% as.numeric
+dat_pred$upper <- plogis(X_pred %*% beta_hat + qnorm(.975) * se_pred) %>% as.numeric
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score/total * 100)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .2) +
+  xlab("Trial") +
+  ylab("Score (%)") +
+  ylim(0, 100) +
+  geom_line(data = dat_pred, aes(y = pred * 100),
+            col = 4, lwd = 1) +
+  geom_ribbon(data = dat_pred,
+              aes(y = pred * 100, ymin = lower * 100, ymax = upper * 100),
+              fill = 4, alpha = .2) +
+  facet_wrap(~ FN)
+
+dat %>%
+  ggplot(aes(x = Trial, colour = FN, fill = FN)) +
+  theme_bw() +
+  xlab("Trial") +
+  ylab("Score (%)") +
+  ylim(0, 100) +
+  geom_line(data = dat_pred, aes(y = pred * 100),
+            lwd = 1) +
+  geom_ribbon(data = dat_pred,
+              aes(y = pred * 100, ymin = lower * 100, ymax = upper * 100),
+              alpha = .2, col = NA)
+```
+
+Individual curves:
+
+```{r, fig.height=10}
+dat_pred_ind <- expand.grid(Trial = seq(1, 4, length = 200),
+                            FN = levels(dat$FN),
+                            Ps = levels(dat$Ps))
+dat_pred_ind$pred <- predict(fit1, dat_pred_ind, type = "response")
+
+dat %>%
+  filter(FN == "massed") %>%
+  ggplot(aes(x = Trial, y = Score/total * 100)) +
+  theme_bw() +
+  geom_line() +
+  xlab("Trial") +
+  ylab("Score (%)") +
+  ylim(0, 100) +
+  geom_line(data = dat_pred_ind %>%
+              filter(FN == "massed"),
+            aes(y = pred * 100),
+            col = 4) +
+  facet_wrap(~ Ps) +
+  ggtitle("Massed")
+
+dat %>%
+  filter(FN == "spaced") %>%
+  ggplot(aes(x = Trial, y = Score/total * 100)) +
+  theme_bw() +
+  geom_line() +
+  xlab("Trial") +
+  ylab("Score (%)") +
+  ylim(0, 100) +
+  geom_line(data = dat_pred_ind %>%
+              filter(FN == "spaced"),
+            aes(y = pred * 100),
+            col = 4) +
+  facet_wrap(~ Ps) +
+  ggtitle("Spaced")
+```
+
+Now we look at the distribution of the random effects. They seem to follow a normal distribution:
+
+```{r, echo = FALSE}
+ran <- ranef(fit)$`FN:Ps` %>%
+  as_tibble %>%
+  mutate(FN_ID = rownames(ranef(fit)$`FN:Ps`)) %>%
+  mutate(FN = sub(":.*", "", FN_ID),
+         ID = sub(".*:", "", FN_ID)) %>%
+  select(- FN_ID)
+
+names(ran)[1:2] <- c("intercept","slope")
+
+par(mfrow = c(2,2))
+hnp(ran$intercept, scale = TRUE, main = "intercept")
+hnp(ran$slope, scale = TRUE, main = "slope")
+hist(ran$intercept, prob = TRUE, main = "intercept")
+lines(density(ran$intercept))
+curve(dnorm(x, 0, sd(ran$intercept)), add = TRUE, col = 4, lwd = 2)
+hist(ran$slope, prob = TRUE, main = "slope")
+lines(density(ran$slope))
+curve(dnorm(x, 0, sd(ran$slope)), add = TRUE, col = 4, lwd = 2)
+```
+
+Let's isolate the individuals with the lowest and highest 5\% intercepts and slopes.
+
+```{r, echo = FALSE}
+lower_int_massed <- ran %>%
+  filter(FN == "massed") %>%
+  filter(intercept <= quantile(intercept, .05)) %>%
+  pull(ID)
+upper_int_massed <- ran %>%
+  filter(FN == "massed") %>%
+  filter(intercept >= quantile(intercept, .95)) %>%
+  pull(ID)
+
+lower_slo_massed <- ran %>%
+  filter(FN == "massed") %>%
+  filter(slope <= quantile(slope, .05)) %>%
+  pull(ID)
+upper_slo_massed <- ran %>%
+  filter(FN == "massed") %>%
+  filter(slope >= quantile(slope, .95)) %>%
+  pull(ID)
+
+lower_int_spaced <- ran %>%
+  filter(FN == "spaced") %>%
+  filter(intercept <= quantile(intercept, .05)) %>%
+  pull(ID)
+upper_int_spaced <- ran %>%
+  filter(FN == "spaced") %>%
+  filter(intercept >= quantile(intercept, .95)) %>%
+  pull(ID)
+
+lower_slo_spaced <- ran %>%
+  filter(FN == "spaced") %>%
+  filter(slope <= quantile(slope, .05)) %>%
+  pull(ID)
+upper_slo_spaced <- ran %>%
+  filter(FN == "spaced") %>%
+  filter(slope >= quantile(slope, .95)) %>%
+  pull(ID)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score/total * 100)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .2) +
+  xlab("Trial") +
+  ylab("Score (%)") +
+  ylim(0, 100) +
+  geom_line(data = dat_pred, aes(y = pred * 100),
+            col = 4, lwd = 1) +
+  geom_ribbon(data = dat_pred,
+              aes(y = pred * 100, ymin = lower * 100, ymax = upper * 100),
+              fill = 4, alpha = .2) +
+  geom_line(data = dat %>%
+              filter(FN == "massed" & Ps %in% lower_int_massed),
+            aes(group = Ps), col = 2) +
+  geom_line(data = dat %>%
+              filter(FN == "spaced" & Ps %in% lower_int_spaced),
+            aes(group = Ps), col = 2) +
+  ggtitle("In red -- lowest 5% intercepts",
+          subtitle = paste("(Massed) ID no.: ", paste(lower_int_massed, collapse = ", "), "\n(Spaced) ID no.: ", paste(lower_int_spaced, collapse = ", "))) +
+  facet_wrap(~ FN)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score/total * 100)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .2) +
+  xlab("Trial") +
+  ylab("Score (%)") +
+  ylim(0, 100) +
+  geom_line(data = dat_pred, aes(y = pred * 100),
+            col = 4, lwd = 1) +
+  geom_ribbon(data = dat_pred,
+              aes(y = pred * 100, ymin = lower * 100, ymax = upper * 100),
+              fill = 4, alpha = .2) +
+  geom_line(data = dat %>%
+              filter(FN == "massed" & Ps %in% upper_int_massed),
+            aes(group = Ps), col = 2) +
+  geom_line(data = dat %>%
+              filter(FN == "spaced" & Ps %in% upper_int_spaced),
+            aes(group = Ps), col = 2) +
+  ggtitle("In red -- highest 5% intercepts",
+          subtitle = paste("(Massed) ID no.: ", paste(upper_int_massed, collapse = ", "), "\n(Spaced) ID no.: ", paste(upper_int_spaced, collapse = ", "))) +
+  facet_wrap(~ FN)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score/total * 100)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .2) +
+  xlab("Trial") +
+  ylab("Score (%)") +
+  ylim(0, 100) +
+  geom_line(data = dat_pred, aes(y = pred * 100),
+            col = 4, lwd = 1) +
+  geom_ribbon(data = dat_pred,
+              aes(y = pred * 100, ymin = lower * 100, ymax = upper * 100),
+              fill = 4, alpha = .2) +
+  geom_line(data = dat %>%
+              filter(FN == "massed" & Ps %in% lower_slo_massed),
+            aes(group = Ps), col = 2) +
+  geom_line(data = dat %>%
+              filter(FN == "spaced" & Ps %in% lower_slo_spaced),
+            aes(group = Ps), col = 2) +
+  ggtitle("In red -- lowest 5% slopes",
+          subtitle = paste("(Massed) ID no.: ", paste(lower_slo_massed, collapse = ", "), "\n(Spaced) ID no.: ", paste(lower_slo_spaced, collapse = ", "))) +
+  facet_wrap(~ FN)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score/total * 100)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .2) +
+  xlab("Trial") +
+  ylab("Score (%)") +
+  ylim(0, 100) +
+  geom_line(data = dat_pred, aes(y = pred * 100),
+            col = 4, lwd = 1) +
+  geom_ribbon(data = dat_pred,
+              aes(y = pred * 100, ymin = lower * 100, ymax = upper * 100),
+              fill = 4, alpha = .2) +
+  geom_line(data = dat %>%
+              filter(FN == "massed" & Ps %in% upper_slo_massed),
+            aes(group = Ps), col = 2) +
+  geom_line(data = dat %>%
+              filter(FN == "spaced" & Ps %in% upper_slo_spaced),
+            aes(group = Ps), col = 2) +
+  ggtitle("In red -- highest 5% slopes",
+          subtitle = paste("(Massed) ID no.: ", paste(upper_slo_massed, collapse = ", "), "\n(Spaced) ID no.: ", paste(upper_slo_spaced, collapse = ", "))) +
+  facet_wrap(~ FN)
+```
+
+Identifying outliers using a bivariate normal distribution:
+
+```{r, echo = FALSE}
+p <- ran %>%
+  ggplot(aes(x = intercept, y = slope)) +
+  theme_bw() +
+  geom_text_repel(aes(label = ID), force = .25) +
+  geom_point(alpha = .5) +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_hline(yintercept = 0, lty = 2) +
+  ggtitle("Random effects per individual",
+          subtitle = "Shaded area represents 95% ellipsoid based on the bivariate normal distribution") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .95,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .90,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .85,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  facet_wrap(~ FN)
+```
+
+Labelling only points out of the 85% ellipse:
+
+```{r, echo = FALSE}
+build <- ggplot_build(p)$data
+points1 <- build[[1]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+points2 <- build[[1]] %>% filter(PANEL == 2) %>% dplyr::select(x,y)
+ell1 <- build[[7]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+ell2 <- build[[7]] %>% filter(PANEL == 2) %>% dplyr::select(x,y)
+
+ell_massed <- which(as.logical(1 - point.in.polygon(points1$x, points1$y, ell1$x, ell1$y)))
+ell_spaced <- which(as.logical(1 - point.in.polygon(points2$x, points2$y, ell2$x, ell2$y)))
+
+ran %>%
+  ggplot(aes(x = intercept, y = slope)) +
+  theme_bw() +
+  geom_text_repel(data = ran %>%
+                    filter(FN == "massed" & ID %in% ell_massed),
+                  aes(label = ID), force = .25) +
+  geom_text_repel(data = ran %>%
+                    filter(FN == "spaced" & ID %in% ell_spaced),
+                  aes(label = ID), force = .25) +
+  geom_point(alpha = .5) +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_hline(yintercept = 0, lty = 2) +
+  ggtitle("Random effects per individual",
+          subtitle = "Shaded area represents 95% ellipsoid based on the bivariate normal distribution") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .95, lty = 2, col = 4) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .90,
+               lty = 2, col = 4, type = "norm") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .85,
+               lty = 2, col = 4, type = "norm") +
+  facet_wrap(~ FN) +
+  coord_equal()
+```
+
+## Calculating ellipse stats
+
+```{r}
+ellipse_massed <- build[[5]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+ellipse_spaced <- build[[5]] %>% filter(PANEL == 2) %>% dplyr::select(x,y)
+
+dist_2_points <- function(x1, x2) {
+  return(sqrt(sum((x1 - x2)^2)))    
+}
+
+ellipse_centre_massed <- c(mean(ellipse_massed$x),mean(ellipse_massed$y))
+distances_massed <- apply(ellipse_massed, 1, function(x) dist_2_points(x, ellipse_centre_massed))
+
+a_massed <- max(distances_massed)
+b_massed <- min(distances_massed)
+area_massed <- pi * a_massed * b_massed
+axis_ratio_massed <- a_massed / b_massed
+ecc_massed <- sqrt(1 - b_massed^2/a_massed^2)
+
+ellipse_centre_spaced <- c(mean(ellipse_spaced$x),mean(ellipse_spaced$y))
+distances_spaced <- apply(ellipse_spaced, 1, function(x) dist_2_points(x, ellipse_centre_spaced))
+
+a_spaced <- max(distances_spaced)
+b_spaced <- min(distances_spaced)
+area_spaced <- pi * a_spaced * b_spaced
+axis_ratio_spaced <- a_spaced / b_spaced
+ecc_spaced <- sqrt(1 - b_spaced^2/a_spaced^2)
+```
+
+```{r}
+final_p <- ran %>%
+  ggplot(aes(x = intercept, y = slope)) +
+  theme_bw() +
+  geom_text_repel(data = ran %>%
+                    filter(FN == "massed" & ID %in% ell_massed),
+                  aes(label = ID), force = .25) +
+  geom_text_repel(data = ran %>%
+                    filter(FN == "spaced" & ID %in% ell_spaced),
+                  aes(label = ID), force = .25) +
+  geom_point(alpha = .5) +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_hline(yintercept = 0, lty = 2) +
+  ggtitle("Random effects per individual",
+          subtitle = paste0("Massed: area = ", round(area_massed, 3),
+                        "; eccentricity = ", round(ecc_massed, 3),
+                        "\nSpaced: area = ", round(area_spaced, 3),
+                        "; eccentricity = ", round(ecc_spaced, 3))) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .95, lty = 2, col = 4) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .90,
+               lty = 2, col = 4, type = "norm") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .85,
+               lty = 2, col = 4, type = "norm") +
+  facet_wrap(~ FN) +
+  coord_equal() +
+  xlab("Intercept") +
+  ylab("Slope") +
+  labs(caption = "Shaded areas represents 95%, 90% and 85% ellipsoids based on the bivariate normal distribution")
+
+print(final_p)
+
+ggsave("spaced_massed_new.png", dpi = 800, units = "in", w = 8, h = 5)
+```
+
+## Comparing observed versus expected frequencies in each quadrant
+
+```{r}
+which_quadrant <- Vectorize(function(x, y) {
+  if(x >= 0) {
+    if(y >= 0) {
+      q <- "Q1"
+    } else {
+      q <- "Q2"
+    }
+  } else {
+    if(y >= 0) {
+      q <- "Q4"
+    } else {
+      q <- "Q3"
+    }
+  }
+  return(q)
+})
+
+ran2 <- ran %>%
+  mutate(quadrant = which_quadrant(intercept, slope))
+
+freq_table <- xtabs(~ FN + quadrant, data = ran2)
+
+y <- as.numeric(freq_table)
+FN <- factor(rep(c("massed","spaced"), 4))
+quadrant <- factor(rep(c("Q1","Q2","Q3","Q4"), each = 2))
+
+mod <- glm(y ~ FN * quadrant, family = poisson)
+anova(mod, test = "Chisq")
+
+chisq.test(freq_table, simulate.p.value = TRUE, B = 10000)
+```
+
+## Clustering based on random effects
+
+```{r, warning = FALSE, message = FALSE}
+ran_mat <- as.matrix(ran[,1:2])
+rownames(ran_mat) <- factor(substr(ran$FN, 1, 1)) : factor(ran$ID)
+#rownames(ran_mat) <- substr(rownames(ran_mat), 1, 1)
+ran_dist <- dist(ran_mat)
+ran_clust <- hclust(ran_dist, method = "ward.D2")
+clus2 <- cutree(ran_clust, 6)
+cols <- gg_color_hue(2)
+
+plot(as.phylo(ran_clust), type = "fan",
+     tip.color = cols[as.numeric(ran$FN == "massed") + 1],
+     font = 1,
+     edge.width = .7)
+
+dat$FNPs <- dat$FN : dat$Ps
+dat$cluster <- as.factor(as.character(dat$FNPs))
+levels(dat$cluster) <- paste("Cluster", clus2)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score/total * 100)) +
+  theme_bw() +
+  geom_line(aes(group = FN:Ps, colour = FN), alpha = .5) +
+  xlab("Trial") +
+  ylab("Score (%)") +
+  ylim(0, 100) +
+  facet_wrap(~ cluster) +
+  geom_smooth(se = FALSE)
+```
+
+Clustering per condition:
+
+```{r, warning = FALSE, message = FALSE}
+ran_mat_massed <- ran_mat[1:179,]
+ran_dist_massed <- dist(ran_mat_massed)
+ran_clust_massed <- hclust(ran_dist_massed, method = "ward.D2")
+clus2_massed <- cutree(ran_clust_massed, 6)
+cols <- gg_color_hue(6)
+
+plot(as.phylo(ran_clust_massed), type = "fan",
+     tip.color = cols[clus2_massed],
+     font = 1,
+     edge.width = .7)
+
+dat_massed <- dat %>% filter(FN == "massed")
+dat_massed$cluster <- as.factor(as.character(dat_massed$Ps))
+levels(dat_massed$cluster) <- paste("Cluster", clus2_massed)
+
+dat_massed %>%
+  ggplot(aes(x = Trial, y = Score/total * 100)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .5) +
+  xlab("Trial") +
+  ylab("Score (%)") +
+  ylim(0, 100) +
+  facet_wrap(~ cluster) +
+  geom_smooth(se = FALSE) +
+  ggtitle("Massed")
+
+ran_mat_spaced <- ran_mat[180:358,]
+ran_dist_spaced <- dist(ran_mat_spaced)
+ran_clust_spaced <- hclust(ran_dist_spaced, method = "ward.D2")
+clus2_spaced <- cutree(ran_clust_spaced, 6)
+cols <- gg_color_hue(6)
+
+plot(as.phylo(ran_clust_spaced), type = "fan",
+     tip.color = cols[clus2_spaced],
+     font = 1,
+     edge.width = .7)
+
+dat_spaced <- dat %>% filter(FN == "spaced")
+dat_spaced$cluster <- as.factor(as.character(dat_spaced$Ps))
+levels(dat_spaced$cluster) <- paste("Cluster", clus2_spaced)
+
+dat_spaced %>%
+  ggplot(aes(x = Trial, y = Score/total * 100)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .5) +
+  xlab("Trial") +
+  ylab("Score (%)") +
+  ylim(0, 100) +
+  facet_wrap(~ cluster) +
+  geom_smooth(se = FALSE) +
+  ggtitle("Spaced")
+```
+
+Checking Total Within-Cluster Sum of Squares.
+
+```{r}
+twss_massed <- twss_spaced <- NULL
+for(i in 1:10) {
+  twss_massed[i] <- sum(sumPartition(ran_mat_massed, cutree(ran_clust_massed, i))[,2])
+  twss_spaced[i] <- sum(sumPartition(ran_mat_spaced, cutree(ran_clust_spaced, i))[,2])
+}
+
+plot(twss_massed, type = "b")
+lines(twss_spaced, type = "b", col = 2)
+```
+
+## Figure 1 parts (a) and (b)
+
+```{r}
+fig1_a <- dat %>%
+  ggplot(aes(x = Trial, y = Score/total * 100)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .2) +
+  xlab("Trial") +
+  ylab("Score (%)") +
+  ylim(0, 100) +
+  geom_line(data = dat_pred, aes(y = pred * 100),
+            col = 4, lwd = 1) +
+  geom_ribbon(data = dat_pred,
+              aes(y = pred * 100, ymin = lower * 100, ymax = upper * 100),
+              fill = 4, alpha = .2) +
+  facet_wrap(~ FN) +
+  ggtitle("(a)")
+
+fig1_b <- ran %>%
+  ggplot(aes(x = intercept, y = slope)) +
+  theme_bw() +
+  geom_text_repel(data = ran %>%
+                    filter(FN == "massed" & ID %in% ell_massed),
+                  aes(label = ID), force = .25) +
+  geom_text_repel(data = ran %>%
+                    filter(FN == "spaced" & ID %in% ell_spaced),
+                  aes(label = ID), force = .25) +
+  geom_point(alpha = .5) +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_hline(yintercept = 0, lty = 2) +
+  ggtitle("(b)",
+          subtitle = paste0("Massed: area = ", round(area_massed, 3),
+                        "; eccentricity = ", round(ecc_massed, 3),
+                        "\nSpaced: area = ", round(area_spaced, 3),
+                        "; eccentricity = ", round(ecc_spaced, 3))) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .95, lty = 2, col = 4) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .90,
+               lty = 2, col = 4, type = "norm") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .85,
+               lty = 2, col = 4, type = "norm") +
+  facet_wrap(~ FN) +
+  coord_equal() +
+  xlab("Intercept") +
+  ylab("Slope") +
+  labs(caption = "Shaded areas represents 95%, 90% and 85% ellipsoids based on the bivariate normal distribution")
+```

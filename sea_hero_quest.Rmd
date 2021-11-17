@@ -1,0 +1,391 @@
+---
+title: "Sea Hero Quest"
+author: "Examining individual learning patterns using GLMMs"
+date: "Commins et al."
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+sumPartition <- function(dat,z){
+  k <-length(unique(z))
+  nobs <- tapply(1:nrow(dat),z,length)
+  withinSS <- tapply(1:nrow(dat),z,function(i){
+    if (length(i)==1) 0
+    else {x<- dat[i,]
+    xm <- scale(x, scale=F)
+    sum(xm^2)
+    }
+  })
+  aveD <- tapply(1:nrow(dat),z,function(i){
+    if (length(i)==1) 0
+    else {x<- dat[i,]
+    xm <- scale(x, scale=F)
+    xm <- apply(xm, 1, function(y) sqrt(sum(y^2)))
+    mean(xm)
+    }
+  })
+  
+  maxD <- tapply(1:nrow(dat),z,function(i){
+    if (length(i)==1) 0
+    else {x<- dat[i,]
+    xm <- scale(x, scale=F)
+    xm <- apply(xm, 1, function(y) sqrt(sum(y^2)))
+    max(xm)
+    }
+  })
+  
+  part<- data.frame("N.obs"=nobs, "Within clus SS" = withinSS, "Ave dist  Centroid" = aveD,
+                    "Max dist centroid" =maxD)
+  rownames(part)<- paste("Cluster", 1:k)
+  
+  return(part)	
+}
+
+library(hnp)
+library(lme4)
+library(tidyverse)
+library(ggplot2)
+library(readxl)
+library(ggrepel)
+library(aplpack)
+library(car)
+library(sp)
+library(gamlss)
+library(ape)
+library(glmmTMB)
+
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+
+dat <- read_csv("sea_hero_quest.csv")
+
+dat$Ps <- as.factor(dat$Ps)
+dat$Age <- as.factor(dat$Age)
+```
+
+## Exploratory analysis
+
+```{r, warning = FALSE, message = FALSE, echo = FALSE}
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .5) +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_smooth(col = 4) +
+  facet_wrap(~ Age, scales = "free_y")
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score, colour = Age)) +
+  theme_bw() +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_smooth(se = FALSE)
+```
+
+## Modelling
+
+We fitted a gamma generalized linear mixed model. We included different smooth effects of Trial per Age group in the linear predictor for the mean and dispersion parameters. Both mean and dispersion were modelled with a log link. Below we present the estimated coefficients, estimated variance-covariance matrix and curve.
+
+```{r, echo = FALSE}
+dat$AgePs <- dat$Age : dat$Ps
+
+fit1 <- glmmTMB(Score ~ bs(scale(Trial, 3)) * Age + (bs(scale(Trial), 3) || AgePs),
+                dispformula = ~ bs(scale(Trial, 3)) * Age,
+                family = Gamma(link = log),
+                data = dat)
+
+summary(fit1)
+```
+
+Diagnostics:
+
+```{r}
+ran <- ranef(fit1)$cond$AgePs %>% as_tibble
+ran$ID <- 1:nrow(ran)
+
+par(mfrow = c(2,4))
+hnp(ran$`(Intercept)`, scale = TRUE, main = "intercept")
+hnp(ran$`bs(scale(Trial), 3)1`, scale = TRUE, main = "bs_1")
+hnp(ran$`bs(scale(Trial), 3)2`, scale = TRUE, main = "bs_2")
+hnp(ran$`bs(scale(Trial), 3)3`, scale = TRUE, main = "bs_3")
+hist(ran$`(Intercept)`, prob = TRUE, main = "intercept")
+lines(density(ran$`(Intercept)`))
+curve(dnorm(x, 0, sd(ran$`(Intercept)`)), add = TRUE, col = 4, lwd = 2)
+hist(ran$`bs(scale(Trial), 3)1`, prob = TRUE, main = "bs_1")
+lines(density(ran$`bs(scale(Trial), 3)1`))
+curve(dnorm(x, 0, sd(ran$`bs(scale(Trial), 3)1`)), add = TRUE, col = 4, lwd = 2)
+hist(ran$`bs(scale(Trial), 3)2`, prob = TRUE, main = "bs_2")
+lines(density(ran$`bs(scale(Trial), 3)2`))
+curve(dnorm(x, 0, sd(ran$`bs(scale(Trial), 3)2`)), add = TRUE, col = 4, lwd = 2)
+hist(ran$`bs(scale(Trial), 3)3`, prob = TRUE, main = "bs_3")
+lines(density(ran$`bs(scale(Trial), 3)3`))
+curve(dnorm(x, 0, sd(ran$`bs(scale(Trial), 3)3`)), add = TRUE, col = 4, lwd = 2)
+```
+
+Predicted curve:
+
+```{r}
+beta_hat <- fixef(fit1)$cond
+V <- vcov(fit1)$cond
+dat_pred <- expand.grid(Trial = seq(1, 5, length = 200),
+                        Age = levels(dat$Age)) %>%
+  as_tibble
+X_pred <- model.matrix(~ bs(scale(Trial), 3) * Age, data = dat_pred)
+dat_pred$pred <- exp(X_pred %*% beta_hat) %>% as.numeric
+se_pred <- sqrt(diag(X_pred %*% V %*% t(X_pred))) %>% as.numeric
+dat_pred$lower <- exp(X_pred %*% beta_hat + qnorm(.025) * se_pred) %>% as.numeric
+dat_pred$upper <- exp(X_pred %*% beta_hat + qnorm(.975) * se_pred) %>% as.numeric
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .1) +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_line(data = dat_pred, aes(y = pred),
+            col = 4, lwd = .5) +
+  geom_ribbon(data = dat_pred,
+              aes(y = pred, ymin = lower, ymax = upper),
+              fill = 4, alpha = .5) +
+  facet_wrap(~ Age, scales = "free_y")
+
+dat %>%
+  ggplot(aes(x = Trial, colour = Age, fill = Age)) +
+  theme_bw() +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_line(data = dat_pred, aes(y = pred),
+            lwd = 1) +
+  geom_ribbon(data = dat_pred,
+              aes(y = pred, ymin = lower, ymax = upper),
+              alpha = .2, col = NA)
+```
+
+Individual curves:
+
+```{r, fig.height=20, fig.width=12}
+dat$pred <- predict(fit1)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line() +
+  geom_line(aes(y = exp(pred)),
+            col = 2) +
+  xlab("Trial") +
+  ylab("Score") +
+  facet_wrap(~ AgePs, ncol = 12)
+```
+
+Clustering.
+
+```{r, fig.width=6, fig.height=6}
+ran_mat <- as.matrix(ran)
+rownames(ran_mat) <- rep(levels(dat$Age), each = 60)
+ran_dist <- dist(ran_mat)
+ran_clust <- hclust(ran_dist, method = "ward.D2")
+clus2 <- cutree(ran_clust, 4)
+cols <- gg_color_hue(4)
+
+plot(as.phylo(ran_clust), type = "fan",
+     tip.color = cols[as.numeric(as.factor(rownames(ran_mat)))],
+     font = 1,
+     edge.width = .7)
+```
+
+```{r}
+dat$cluster <- as.factor(as.character(dat$AgePs))
+levels(dat$cluster) <- paste("Cluster", clus2)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line(aes(group = AgePs, colour = Age), alpha = .7) +
+  xlab("Trial") +
+  ylab("Score") +
+  facet_wrap(~ cluster)
+```
+
+Checking Total Within Cluster Sum of Squares for different numbers of clusters.
+
+```{r}
+twss <- NULL
+for(i in 1:10) {
+  twss[i] <- sum(sumPartition(ran_mat, cutree(ran_clust, i))[,2])
+}
+
+plot(twss, type = "b")
+```
+
+## Figure 3
+
+```{r}
+twss_plot <- tibble(twss = twss,
+                    nclust = 1:10)
+
+dendro_data_k <- function(hc, k) {
+  
+  hcdata    <-  ggdendro::dendro_data(hc, type = "rectangle")
+  seg       <-  hcdata$segments
+  labclust  <-  cutree(hc, k)[hc$order]
+  segclust  <-  rep(0L, nrow(seg))
+  heights   <-  sort(hc$height, decreasing = TRUE)
+  height    <-  mean(c(heights[k], heights[k - 1L]), na.rm = TRUE)
+  
+  for (i in 1:k) {
+    xi      <-  hcdata$labels$x[labclust == i]
+    idx1    <-  seg$x    >= min(xi) & seg$x    <= max(xi)
+    idx2    <-  seg$xend >= min(xi) & seg$xend <= max(xi)
+    idx3    <-  seg$yend < height
+    idx     <-  idx1 & idx2 & idx3
+    segclust[idx] <- i
+  }
+  
+  idx                    <-  which(segclust == 0L)
+  segclust[idx]          <-  segclust[idx + 1L]
+  hcdata$segments$clust  <-  segclust
+  hcdata$segments$line   <-  as.integer(segclust < 1L)
+  hcdata$labels$clust    <-  labclust
+  
+  hcdata
+}
+
+set_labels_params <- function(nbLabels,
+                              direction = c("tb", "bt", "lr", "rl"),
+                              fan       = FALSE) {
+  if (fan) {
+    angle       <-  360 / nbLabels * 1:nbLabels + 90
+    idx         <-  angle >= 90 & angle <= 270
+    angle[idx]  <-  angle[idx] + 180
+    hjust       <-  rep(0, nbLabels)
+    hjust[idx]  <-  1
+  } else {
+    angle       <-  rep(0, nbLabels)
+    hjust       <-  0
+    if (direction %in% c("tb", "bt")) { angle <- angle + 45 }
+    if (direction %in% c("tb", "rl")) { hjust <- 1 }
+  }
+  list(angle = angle, hjust = hjust, vjust = 0.5)
+}
+
+plot_ggdendro <- function(hcdata,
+                          direction   = c("lr", "rl", "tb", "bt"),
+                          fan         = FALSE,
+                          scale.color = NULL,
+                          branch.size = 1,
+                          label.size  = 3,
+                          nudge.label = 0.01,
+                          expand.y    = 0.1) {
+  
+  direction <- match.arg(direction) # if fan = FALSE
+  ybreaks   <- pretty(segment(hcdata)$y, n = 5)
+  ymax      <- max(segment(hcdata)$y)
+  
+  ## branches
+  p <- ggplot() +
+    geom_segment(data         =  segment(hcdata),
+                 aes(x        =  x,
+                     y        =  y,
+                     xend     =  xend,
+                     yend     =  yend,
+                     colour   =  factor(clust)),
+                 lineend      =  "round",
+                 show.legend  =  FALSE,
+                 size         =  branch.size)
+  
+  ## orientation
+  if (fan) {
+    p <- p +
+      coord_polar(direction = -1) +
+      scale_x_continuous(breaks = NULL,
+                         limits = c(0, nrow(label(hcdata)))) +
+      scale_y_reverse(breaks = ybreaks)
+  } else {
+    p <- p + scale_x_continuous(breaks = NULL)
+    if (direction %in% c("rl", "lr")) {
+      p <- p + coord_flip()
+    }
+    if (direction %in% c("bt", "lr")) {
+      p <- p + scale_y_reverse(breaks = ybreaks)
+    } else {
+      p <- p + scale_y_continuous(breaks = ybreaks)
+      nudge.label <- -(nudge.label)
+    }
+  }
+  
+  # labels
+  labelParams <- set_labels_params(nrow(hcdata$labels), direction, fan)
+  hcdata$labels$angle <- labelParams$angle
+  
+  p <- p +
+    geom_text(data        =  label(hcdata),
+              aes(x       =  x,
+                  y       =  y,
+                  label   =  label,
+                  colour  =  factor(label),
+                  angle   =  angle),
+              vjust       =  labelParams$vjust,
+              hjust       =  labelParams$hjust,
+              nudge_y     =  ymax * nudge.label,
+              size        =  label.size,
+              show.legend =  FALSE)
+  
+  if (!is.null(scale.color)) {
+    p <- p + scale_color_manual(values = scale.color)
+  }
+  
+  ylim <- -round(ymax * expand.y, 1)
+  p    <- p + expand_limits(y = ylim)
+  
+  p
+}
+
+dend_col <- gg_color_hue(4)
+ddata <- dendro_data_k(ran_clust, 4)
+
+fig3_a <- dat %>%
+  ggplot(aes(x = Trial, colour = Age, fill = Age)) +
+  theme_bw() +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_line(data = dat_pred, aes(y = pred),
+            lwd = 1) +
+  geom_ribbon(data = dat_pred,
+              aes(y = pred, ymin = lower, ymax = upper),
+              alpha = .2, col = NA) +
+  ggtitle("(a)")
+
+fig3_b <- dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line(aes(group = AgePs, colour = Age), alpha = .7) +
+  xlab("Trial") +
+  ylab("Score") +
+  facet_wrap(~ cluster) +
+  ggtitle("(b)")
+
+fig3_c <- plot_ggdendro(ddata,
+              fan = TRUE,
+              label.size = 2,
+              expand.y = .1,
+              scale.color = c(1,1,dend_col[1],1,dend_col[2],1,1,dend_col[3],dend_col[4]),
+              branch.size = .4) +
+  theme_void() +
+  ggtitle("(c)")
+
+fig3_d <- twss_plot %>%
+  filter(nclust <= 7) %>%
+  ggplot(aes(y = twss, x = nclust)) +
+  theme_bw() +
+  geom_point() +
+  geom_line() +
+  xlab("Number of clusters") +
+  ylab("TWSS") +
+  scale_x_continuous(breaks = 1:7) +
+  ggtitle("(d)")
+```

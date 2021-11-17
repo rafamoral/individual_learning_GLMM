@@ -1,0 +1,1409 @@
+---
+title: "Virtual Navigation Task"
+author: "Examining individual learning patterns using GLMMs"
+date: "Commins et al."
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+sumPartition <- function(dat,z){
+  k <-length(unique(z))
+  nobs <- tapply(1:nrow(dat),z,length)
+  withinSS <- tapply(1:nrow(dat),z,function(i){
+    if (length(i)==1) 0
+    else {x<- dat[i,]
+    xm <- scale(x, scale=F)
+    sum(xm^2)
+    }
+  })
+  aveD <- tapply(1:nrow(dat),z,function(i){
+    if (length(i)==1) 0
+    else {x<- dat[i,]
+    xm <- scale(x, scale=F)
+    xm <- apply(xm, 1, function(y) sqrt(sum(y^2)))
+    mean(xm)
+    }
+  })
+  
+  maxD <- tapply(1:nrow(dat),z,function(i){
+    if (length(i)==1) 0
+    else {x<- dat[i,]
+    xm <- scale(x, scale=F)
+    xm <- apply(xm, 1, function(y) sqrt(sum(y^2)))
+    max(xm)
+    }
+  })
+  
+  part<- data.frame("N.obs"=nobs, "Within clus SS" = withinSS, "Ave dist  Centroid" = aveD,
+                    "Max dist centroid" =maxD)
+  rownames(part)<- paste("Cluster", 1:k)
+  
+  return(part)	
+}
+
+library(hnp)
+library(lme4)
+library(tidyverse)
+library(ggplot2)
+library(readxl)
+library(ggrepel)
+library(aplpack)
+library(car)
+library(sp)
+library(gamlss)
+library(gamlss.cens)
+library(ape)
+library(ggdendro)
+
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+
+dat <- read_csv("virtual_navigation_task.csv")
+
+dat$Ps <- as.factor(dat$Ps)
+dat$cens <- ifelse(dat$Score == 60, 0, 1)
+```
+
+## Exploratory analysis
+
+```{r, warning = FALSE, message = FALSE, echo = FALSE}
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .5) +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_smooth(col = 4)
+
+dat %>%
+  group_by(Trial) %>%
+  summarise(variance = var(Score)) %>%
+  ggplot(aes(x = Trial, y = log(variance))) +
+  theme_bw() +
+  geom_point() +
+  geom_smooth(se = FALSE, method = "lm")
+```
+
+## Modelling
+
+We fitted a right-censored Gamma mixed model. We included different linear effects of Trial in the linear predictor for the mean parameter, and random intercepts and slopes per individual. We also included the linear effect of Trial in the linear predictor for the dispersion parameter. Both mean and dispersion were modelled with a log link. Below we present the estimated coefficients, estimated variance-covariance matrix and curve.
+
+```{r, echo = FALSE}
+gen.cens(GA)
+
+fit1 <- gamlss(Surv(time = Score, event = cens, type = "right") ~
+                 Trial + re(random = list(Ps = pdDiag(~ Trial))),
+               sigma.formula = ~ Trial,
+               family = cens(GA),
+               data = dat)
+summary(fit1)
+
+getSmo(fit1)
+```
+
+Diagnostics:
+
+```{r}
+wp(fit1)
+
+ran <- ranef(getSmo(fit1)) %>% as_tibble
+names(ran) <- c("intercept","slope")
+ran$ID <- 1:nrow(ran)
+
+par(mfrow = c(2,2))
+hnp(ran$intercept, scale = TRUE, main = "intercept")
+hnp(ran$slope, scale = TRUE, main = "slope")
+hist(ran$intercept, prob = TRUE, main = "intercept")
+lines(density(ran$intercept))
+curve(dnorm(x, 0, sd(ran$intercept)), add = TRUE, col = 4, lwd = 2)
+hist(ran$slope, prob = TRUE, main = "slope")
+lines(density(ran$slope))
+curve(dnorm(x, 0, sd(ran$slope)), add = TRUE, col = 4, lwd = 2)
+```
+
+Predicted curve:
+
+```{r}
+beta_hat <- coef(fit1)[-length(coef(fit1))]
+V <- vcov(fit1)[1:2,1:2]
+dat_pred <- expand.grid(Trial = seq(1, 12, length = 200)) %>%
+  as_tibble
+X_pred <- model.matrix(~ Trial, data = dat_pred)
+dat_pred$pred <- exp(X_pred %*% beta_hat) %>% as.numeric
+se_pred <- sqrt(diag(X_pred %*% V %*% t(X_pred))) %>% as.numeric
+dat_pred$lower <- exp(X_pred %*% beta_hat + qnorm(.025) * se_pred) %>% as.numeric
+dat_pred$upper <- exp(X_pred %*% beta_hat + qnorm(.975) * se_pred) %>% as.numeric
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .2) +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_line(data = dat_pred, aes(y = pred),
+            col = 4, lwd = 1) +
+  geom_ribbon(data = dat_pred,
+              aes(y = pred, ymin = lower, ymax = upper),
+              fill = 4, alpha = .2)
+
+fig2_a <- dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .2) +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_line(data = dat_pred, aes(y = pred),
+            col = 4, lwd = 1) +
+  geom_ribbon(data = dat_pred,
+              aes(y = pred, ymin = lower, ymax = upper),
+              fill = 4, alpha = .2) +
+  scale_x_continuous(breaks = 1:12) +
+  ggtitle("(a)")
+
+```
+
+Individual curves:
+
+```{r}
+dat$pred <- predict(fit1)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line() +
+  geom_line(aes(y = exp(pred)),
+            col = 2) +
+  xlab("Trial") +
+  ylab("Score") +
+  facet_wrap(~ Ps)
+```
+
+Producing ellipsoids.
+
+```{r}
+p <- ran %>%
+  ggplot(aes(x = intercept, y = slope)) +
+  theme_bw() +
+  geom_point(alpha = .5) +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_hline(yintercept = 0, lty = 2) +
+  ggtitle("Random effects per individual",
+          subtitle = "Shaded area represents 95% ellipsoid based on the bivariate normal distribution") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .95,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .90,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .85,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  xlab("Intercept") +
+  ylab("Slope")
+
+build <- ggplot_build(p)$data
+points1 <- build[[1]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+ell1 <- build[[6]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+
+ell_1 <- which(as.logical(1 - point.in.polygon(points1$x, points1$y, ell1$x, ell1$y)))
+
+ell1 <- build[[5]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+
+dist_2_points <- function(x1, x2) {
+  return(sqrt(sum((x1 - x2)^2)))    
+}
+
+ell1_centre <- c(mean(ell1$x),mean(ell1$y))
+dist_ell1 <- apply(ell1, 1, function(x) dist_2_points(x, ell1_centre))
+
+a_ell1 <- max(dist_ell1)
+b_ell1 <- min(dist_ell1)
+area_ell1 <- pi * a_ell1 * b_ell1
+axis_ratio_ell1 <- a_ell1 / b_ell1
+ecc_ell1 <- sqrt(1 - b_ell1^2/a_ell1^2)
+```
+
+```{r}
+final_p <- ran %>%
+  ggplot(aes(x = intercept, y = slope)) +
+  theme_bw() +
+  geom_text_repel(data = ran %>%
+                    filter(ID %in% ell_1),
+                  aes(label = ID), force = .25) +
+  geom_point(alpha = .5) +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_hline(yintercept = 0, lty = 2) +
+  ggtitle("Random effects per individual",
+          subtitle = paste0("95% ellipse area = ", round(area_ell1, 3),
+                            "; eccentricity = ", round(ecc_ell1, 3))) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .95,
+               lty = 2, col = 4, type = "norm") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .90,
+               lty = 2, col = 4, type = "norm") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .85,
+               lty = 2, col = 4, type = "norm") +
+  xlab("Intercept") +
+  ylab("Slope") +
+  labs(caption = "Shaded areas represents 95%, 90% and 85% ellipsoids based on the bivariate normal distribution")
+
+print(final_p)
+
+ggsave("continuous_censored_new.png", dpi = 800, units = "in", w = 6, h = 5)
+
+fig2_b <- ran %>%
+  ggplot(aes(x = intercept, y = slope)) +
+  theme_bw() +
+  geom_text_repel(data = ran %>%
+                    filter(ID %in% ell_1),
+                  aes(label = ID), force = .25) +
+  geom_point(alpha = .5) +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_hline(yintercept = 0, lty = 2) +
+  ggtitle("(b)",
+          subtitle = paste0("95% ellipse area = ", round(area_ell1, 3),
+                            "; eccentricity = ", round(ecc_ell1, 3))) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .95,
+               lty = 2, col = 4, type = "norm") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .90,
+               lty = 2, col = 4, type = "norm") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .85,
+               lty = 2, col = 4, type = "norm") +
+  xlab("Intercept") +
+  ylab("Slope") +
+  labs(caption = "Shaded areas represents 95%, 90% and 85% ellipsoids based on the bivariate normal distribution")
+```
+
+In blue the individuals with outlying behaviour:
+
+```{r}
+dat$pred <- predict(fit1)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line() +
+  geom_line(aes(y = exp(pred)),
+            col = 2) +
+  geom_line(data = dat %>%
+              filter(Ps %in% ell_1),
+            aes(y = exp(pred)),
+            col = 4) +
+  xlab("Trial") +
+  ylab("Score") +
+  facet_wrap(~ Ps)
+```
+
+## Clustering based on random effects
+
+```{r}
+ran_dist112 <- dist(ran[,1:2])
+ran_clust112 <- hclust(ran_dist112, method = "ward.D2")
+clus2112 <- cutree(ran_clust112, 2)
+cols <- gg_color_hue(2)
+
+plot(as.phylo(ran_clust112), type = "fan",
+     tip.color = cols[clus2112],
+     font = 1,
+     edge.width = .7)
+
+dat$cluster <- dat$Ps
+levels(dat$cluster) <- paste("Cluster", clus2112)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .5) +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_smooth(col = 4) +
+  facet_wrap(~ cluster)
+
+fig2_c <- dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .5) +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_smooth(col = 4, se = FALSE) +
+  facet_wrap(~ cluster) +
+  scale_x_continuous(breaks = 1:12) +
+  ggtitle("(c)")
+```
+
+Checking Total Within Cluster Sum of Squares for different numbers of clusters.
+
+```{r}
+twss1 <- NULL
+for(i in 1:10) {
+  twss1[i] <- sum(sumPartition(ran[,1:2], cutree(ran_clust112, i))[,2])
+}
+
+plot(twss1, type = "b")
+```
+
+## Re-running everything stopping at different trial numbers
+
+### Stopping at trial 4
+
+```{r}
+dat <- read_csv("continuous_censored.csv")
+
+dat$Ps <- as.factor(dat$Ps)
+dat$cens <- ifelse(dat$Score == 60, 0, 1)
+
+dat <- dat %>%
+  filter(Trial <= 4)
+```
+
+```{r, echo = FALSE}
+gen.cens(GA)
+
+fit1 <- gamlss(Surv(time = Score, event = cens, type = "right") ~
+                 Trial + re(random = list(Ps = pdDiag(~ Trial))),
+               sigma.formula = ~ Trial,
+               family = cens(GA),
+               data = dat)
+summary(fit1)
+
+getSmo(fit1)
+```
+
+Diagnostics:
+
+```{r}
+wp(fit1)
+
+ran <- ranef(getSmo(fit1)) %>% as_tibble
+names(ran) <- c("intercept","slope")
+ran$ID <- 1:nrow(ran)
+
+par(mfrow = c(2,2))
+hnp(ran$intercept, scale = TRUE, main = "intercept")
+hnp(ran$slope, scale = TRUE, main = "slope")
+hist(ran$intercept, prob = TRUE, main = "intercept")
+lines(density(ran$intercept))
+curve(dnorm(x, 0, sd(ran$intercept)), add = TRUE, col = 4, lwd = 2)
+hist(ran$slope, prob = TRUE, main = "slope")
+lines(density(ran$slope))
+curve(dnorm(x, 0, sd(ran$slope)), add = TRUE, col = 4, lwd = 2)
+```
+
+Predicted curve:
+
+```{r}
+beta_hat <- coef(fit1)[-length(coef(fit1))]
+V <- vcov(fit1)[1:2,1:2]
+dat_pred <- expand.grid(Trial = seq(1, 12, length = 200)) %>%
+  as_tibble
+X_pred <- model.matrix(~ Trial, data = dat_pred)
+dat_pred$pred <- exp(X_pred %*% beta_hat) %>% as.numeric
+se_pred <- sqrt(diag(X_pred %*% V %*% t(X_pred))) %>% as.numeric
+dat_pred$lower <- exp(X_pred %*% beta_hat + qnorm(.025) * se_pred) %>% as.numeric
+dat_pred$upper <- exp(X_pred %*% beta_hat + qnorm(.975) * se_pred) %>% as.numeric
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .2) +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_line(data = dat_pred, aes(y = pred),
+            col = 4, lwd = 1) +
+  geom_ribbon(data = dat_pred,
+              aes(y = pred, ymin = lower, ymax = upper),
+              fill = 4, alpha = .2)
+```
+
+Individual curves:
+
+```{r}
+dat$pred <- predict(fit1)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line() +
+  geom_line(aes(y = exp(pred)),
+            col = 2) +
+  xlab("Trial") +
+  ylab("Score") +
+  facet_wrap(~ Ps)
+```
+
+Producing ellipsoids.
+
+```{r}
+p <- ran %>%
+  ggplot(aes(x = intercept, y = slope)) +
+  theme_bw() +
+  geom_point(alpha = .5) +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_hline(yintercept = 0, lty = 2) +
+  ggtitle("Random effects per individual",
+          subtitle = "Shaded area represents 95% ellipsoid based on the bivariate normal distribution") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .95,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .90,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .85,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  xlab("Intercept") +
+  ylab("Slope")
+
+build <- ggplot_build(p)$data
+points1 <- build[[1]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+ell1 <- build[[6]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+
+ell_1 <- which(as.logical(1 - point.in.polygon(points1$x, points1$y, ell1$x, ell1$y)))
+
+ell1 <- build[[5]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+
+dist_2_points <- function(x1, x2) {
+  return(sqrt(sum((x1 - x2)^2)))    
+}
+
+ell1_centre <- c(mean(ell1$x),mean(ell1$y))
+dist_ell1 <- apply(ell1, 1, function(x) dist_2_points(x, ell1_centre))
+
+a_ell1 <- max(dist_ell1)
+b_ell1 <- min(dist_ell1)
+area_ell1 <- pi * a_ell1 * b_ell1
+axis_ratio_ell1 <- a_ell1 / b_ell1
+ecc_ell1 <- sqrt(1 - b_ell1^2/a_ell1^2)
+```
+
+```{r}
+final_p <- ran %>%
+  ggplot(aes(x = intercept, y = slope)) +
+  theme_bw() +
+  geom_text_repel(data = ran %>%
+                    filter(ID %in% ell_1),
+                  aes(label = ID), force = .25) +
+  geom_point(alpha = .5) +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_hline(yintercept = 0, lty = 2) +
+  ggtitle("Random effects per individual",
+          subtitle = paste0("95% ellipse area = ", round(area_ell1, 3),
+                            "; eccentricity = ", round(ecc_ell1, 3))) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .95,
+               lty = 2, col = 4, type = "norm") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .90,
+               lty = 2, col = 4, type = "norm") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .85,
+               lty = 2, col = 4, type = "norm") +
+  xlab("Intercept") +
+  ylab("Slope") +
+  labs(caption = "Shaded areas represents 95%, 90% and 85% ellipsoids based on the bivariate normal distribution")
+
+print(final_p)
+
+ggsave("continuous_censored_new_t4.png", dpi = 800, units = "in", w = 6, h = 5)
+```
+
+In blue the individuals with outlying behaviour:
+
+```{r}
+dat$pred <- predict(fit1)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line() +
+  geom_line(aes(y = exp(pred)),
+            col = 2) +
+  geom_line(data = dat %>%
+              filter(Ps %in% ell_1),
+            aes(y = exp(pred)),
+            col = 4) +
+  xlab("Trial") +
+  ylab("Score") +
+  facet_wrap(~ Ps)
+```
+
+Clustering.
+
+```{r}
+ran_dist14 <- dist(ran[,1:2])
+ran_clust14 <- hclust(ran_dist14, method = "ward.D2")
+clus214 <- cutree(ran_clust14, 2)
+cols <- gg_color_hue(2)
+
+plot(as.phylo(ran_clust14), type = "fan",
+     tip.color = cols[clus214],
+     font = 1,
+     edge.width = .7)
+
+dat$cluster <- dat$Ps
+levels(dat$cluster) <- paste("Cluster", clus214)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .5) +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_smooth(col = 4) +
+  facet_wrap(~ cluster)
+```
+
+Checking Total Within Cluster Sum of Squares for different numbers of clusters.
+
+```{r}
+twss2 <- NULL
+for(i in 1:10) {
+  twss2[i] <- sum(sumPartition(ran[,1:2], cutree(ran_clust14, i))[,2])
+}
+
+plot(twss2, type = "b")
+```
+
+### Stopping at trial 6
+
+```{r}
+dat <- read_csv("continuous_censored.csv")
+
+dat$Ps <- as.factor(dat$Ps)
+dat$cens <- ifelse(dat$Score == 60, 0, 1)
+
+dat <- dat %>%
+  filter(Trial <= 6)
+```
+
+```{r, echo = FALSE}
+gen.cens(GA)
+
+fit1 <- gamlss(Surv(time = Score, event = cens, type = "right") ~
+                 Trial + re(random = list(Ps = pdDiag(~ Trial))),
+               sigma.formula = ~ Trial,
+               family = cens(GA),
+               data = dat)
+summary(fit1)
+
+getSmo(fit1)
+```
+
+Diagnostics:
+
+```{r}
+wp(fit1)
+
+ran <- ranef(getSmo(fit1)) %>% as_tibble
+names(ran) <- c("intercept","slope")
+ran$ID <- 1:nrow(ran)
+
+par(mfrow = c(2,2))
+hnp(ran$intercept, scale = TRUE, main = "intercept")
+hnp(ran$slope, scale = TRUE, main = "slope")
+hist(ran$intercept, prob = TRUE, main = "intercept")
+lines(density(ran$intercept))
+curve(dnorm(x, 0, sd(ran$intercept)), add = TRUE, col = 4, lwd = 2)
+hist(ran$slope, prob = TRUE, main = "slope")
+lines(density(ran$slope))
+curve(dnorm(x, 0, sd(ran$slope)), add = TRUE, col = 4, lwd = 2)
+```
+
+Predicted curve:
+
+```{r}
+beta_hat <- coef(fit1)[-length(coef(fit1))]
+V <- vcov(fit1)[1:2,1:2]
+dat_pred <- expand.grid(Trial = seq(1, 12, length = 200)) %>%
+  as_tibble
+X_pred <- model.matrix(~ Trial, data = dat_pred)
+dat_pred$pred <- exp(X_pred %*% beta_hat) %>% as.numeric
+se_pred <- sqrt(diag(X_pred %*% V %*% t(X_pred))) %>% as.numeric
+dat_pred$lower <- exp(X_pred %*% beta_hat + qnorm(.025) * se_pred) %>% as.numeric
+dat_pred$upper <- exp(X_pred %*% beta_hat + qnorm(.975) * se_pred) %>% as.numeric
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .2) +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_line(data = dat_pred, aes(y = pred),
+            col = 4, lwd = 1) +
+  geom_ribbon(data = dat_pred,
+              aes(y = pred, ymin = lower, ymax = upper),
+              fill = 4, alpha = .2)
+```
+
+Individual curves:
+
+```{r}
+dat$pred <- predict(fit1)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line() +
+  geom_line(aes(y = exp(pred)),
+            col = 2) +
+  xlab("Trial") +
+  ylab("Score") +
+  facet_wrap(~ Ps)
+```
+
+Producing ellipsoids.
+
+```{r}
+p <- ran %>%
+  ggplot(aes(x = intercept, y = slope)) +
+  theme_bw() +
+  geom_point(alpha = .5) +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_hline(yintercept = 0, lty = 2) +
+  ggtitle("Random effects per individual",
+          subtitle = "Shaded area represents 95% ellipsoid based on the bivariate normal distribution") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .95,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .90,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .85,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  xlab("Intercept") +
+  ylab("Slope")
+
+build <- ggplot_build(p)$data
+points1 <- build[[1]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+ell1 <- build[[6]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+
+ell_1 <- which(as.logical(1 - point.in.polygon(points1$x, points1$y, ell1$x, ell1$y)))
+
+ell1 <- build[[5]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+
+dist_2_points <- function(x1, x2) {
+  return(sqrt(sum((x1 - x2)^2)))    
+}
+
+ell1_centre <- c(mean(ell1$x),mean(ell1$y))
+dist_ell1 <- apply(ell1, 1, function(x) dist_2_points(x, ell1_centre))
+
+a_ell1 <- max(dist_ell1)
+b_ell1 <- min(dist_ell1)
+area_ell1 <- pi * a_ell1 * b_ell1
+axis_ratio_ell1 <- a_ell1 / b_ell1
+ecc_ell1 <- sqrt(1 - b_ell1^2/a_ell1^2)
+```
+
+```{r}
+final_p <- ran %>%
+  ggplot(aes(x = intercept, y = slope)) +
+  theme_bw() +
+  geom_text_repel(data = ran %>%
+                    filter(ID %in% ell_1),
+                  aes(label = ID), force = .25) +
+  geom_point(alpha = .5) +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_hline(yintercept = 0, lty = 2) +
+  ggtitle("Random effects per individual",
+          subtitle = paste0("95% ellipse area = ", round(area_ell1, 3),
+                            "; eccentricity = ", round(ecc_ell1, 3))) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .95,
+               lty = 2, col = 4, type = "norm") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .90,
+               lty = 2, col = 4, type = "norm") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .85,
+               lty = 2, col = 4, type = "norm") +
+  xlab("Intercept") +
+  ylab("Slope") +
+  labs(caption = "Shaded areas represents 95%, 90% and 85% ellipsoids based on the bivariate normal distribution")
+
+print(final_p)
+
+ggsave("continuous_censored_new_t6.png", dpi = 800, units = "in", w = 6, h = 5)
+```
+
+In blue the individuals with outlying behaviour:
+
+```{r}
+dat$pred <- predict(fit1)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line() +
+  geom_line(aes(y = exp(pred)),
+            col = 2) +
+  geom_line(data = dat %>%
+              filter(Ps %in% ell_1),
+            aes(y = exp(pred)),
+            col = 4) +
+  xlab("Trial") +
+  ylab("Score") +
+  facet_wrap(~ Ps)
+```
+
+Clustering.
+
+```{r}
+ran_dist <- dist(ran[,1:2])
+ran_clust <- hclust(ran_dist, method = "ward.D2")
+clus2 <- cutree(ran_clust, 2)
+cols <- gg_color_hue(2)
+
+plot(as.phylo(ran_clust), type = "fan",
+     tip.color = cols[clus2],
+     font = 1,
+     edge.width = .7)
+
+dat$cluster <- dat$Ps
+levels(dat$cluster) <- paste("Cluster", clus2)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .5) +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_smooth(col = 4) +
+  facet_wrap(~ cluster)
+```
+
+Checking Total Within Cluster Sum of Squares for different numbers of clusters.
+
+```{r}
+twss3 <- NULL
+for(i in 1:10) {
+  twss3[i] <- sum(sumPartition(ran[,1:2], cutree(ran_clust, i))[,2])
+}
+
+plot(twss3, type = "b")
+```
+
+### Stopping at trial 8
+
+```{r}
+dat <- read_csv("continuous_censored.csv")
+
+dat$Ps <- as.factor(dat$Ps)
+dat$cens <- ifelse(dat$Score == 60, 0, 1)
+
+dat <- dat %>%
+  filter(Trial <= 8)
+```
+
+```{r, echo = FALSE}
+gen.cens(GA)
+
+fit1 <- gamlss(Surv(time = Score, event = cens, type = "right") ~
+                 Trial + re(random = list(Ps = pdDiag(~ Trial))),
+               sigma.formula = ~ Trial,
+               family = cens(GA),
+               data = dat)
+summary(fit1)
+
+getSmo(fit1)
+```
+
+Diagnostics:
+
+```{r}
+wp(fit1)
+
+ran <- ranef(getSmo(fit1)) %>% as_tibble
+names(ran) <- c("intercept","slope")
+ran$ID <- 1:nrow(ran)
+
+par(mfrow = c(2,2))
+hnp(ran$intercept, scale = TRUE, main = "intercept")
+hnp(ran$slope, scale = TRUE, main = "slope")
+hist(ran$intercept, prob = TRUE, main = "intercept")
+lines(density(ran$intercept))
+curve(dnorm(x, 0, sd(ran$intercept)), add = TRUE, col = 4, lwd = 2)
+hist(ran$slope, prob = TRUE, main = "slope")
+lines(density(ran$slope))
+curve(dnorm(x, 0, sd(ran$slope)), add = TRUE, col = 4, lwd = 2)
+```
+
+Predicted curve:
+
+```{r}
+beta_hat <- coef(fit1)[-length(coef(fit1))]
+V <- vcov(fit1)[1:2,1:2]
+dat_pred <- expand.grid(Trial = seq(1, 12, length = 200)) %>%
+  as_tibble
+X_pred <- model.matrix(~ Trial, data = dat_pred)
+dat_pred$pred <- exp(X_pred %*% beta_hat) %>% as.numeric
+se_pred <- sqrt(diag(X_pred %*% V %*% t(X_pred))) %>% as.numeric
+dat_pred$lower <- exp(X_pred %*% beta_hat + qnorm(.025) * se_pred) %>% as.numeric
+dat_pred$upper <- exp(X_pred %*% beta_hat + qnorm(.975) * se_pred) %>% as.numeric
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .2) +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_line(data = dat_pred, aes(y = pred),
+            col = 4, lwd = 1) +
+  geom_ribbon(data = dat_pred,
+              aes(y = pred, ymin = lower, ymax = upper),
+              fill = 4, alpha = .2)
+```
+
+Individual curves:
+
+```{r}
+dat$pred <- predict(fit1)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line() +
+  geom_line(aes(y = exp(pred)),
+            col = 2) +
+  xlab("Trial") +
+  ylab("Score") +
+  facet_wrap(~ Ps)
+```
+
+Producing ellipsoids.
+
+```{r}
+p <- ran %>%
+  ggplot(aes(x = intercept, y = slope)) +
+  theme_bw() +
+  geom_point(alpha = .5) +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_hline(yintercept = 0, lty = 2) +
+  ggtitle("Random effects per individual",
+          subtitle = "Shaded area represents 95% ellipsoid based on the bivariate normal distribution") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .95,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .90,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .85,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  xlab("Intercept") +
+  ylab("Slope")
+
+build <- ggplot_build(p)$data
+points1 <- build[[1]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+ell1 <- build[[6]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+
+ell_1 <- which(as.logical(1 - point.in.polygon(points1$x, points1$y, ell1$x, ell1$y)))
+
+ell1 <- build[[5]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+
+dist_2_points <- function(x1, x2) {
+  return(sqrt(sum((x1 - x2)^2)))    
+}
+
+ell1_centre <- c(mean(ell1$x),mean(ell1$y))
+dist_ell1 <- apply(ell1, 1, function(x) dist_2_points(x, ell1_centre))
+
+a_ell1 <- max(dist_ell1)
+b_ell1 <- min(dist_ell1)
+area_ell1 <- pi * a_ell1 * b_ell1
+axis_ratio_ell1 <- a_ell1 / b_ell1
+ecc_ell1 <- sqrt(1 - b_ell1^2/a_ell1^2)
+```
+
+```{r}
+final_p <- ran %>%
+  ggplot(aes(x = intercept, y = slope)) +
+  theme_bw() +
+  geom_text_repel(data = ran %>%
+                    filter(ID %in% ell_1),
+                  aes(label = ID), force = .25) +
+  geom_point(alpha = .5) +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_hline(yintercept = 0, lty = 2) +
+  ggtitle("Random effects per individual",
+          subtitle = paste0("95% ellipse area = ", round(area_ell1, 3),
+                            "; eccentricity = ", round(ecc_ell1, 3))) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .95,
+               lty = 2, col = 4, type = "norm") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .90,
+               lty = 2, col = 4, type = "norm") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .85,
+               lty = 2, col = 4, type = "norm") +
+  xlab("Intercept") +
+  ylab("Slope") +
+  labs(caption = "Shaded areas represents 95%, 90% and 85% ellipsoids based on the bivariate normal distribution")
+
+print(final_p)
+
+ggsave("continuous_censored_new_t8.png", dpi = 800, units = "in", w = 6, h = 5)
+```
+
+In blue the individuals with outlying behaviour:
+
+```{r}
+dat$pred <- predict(fit1)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line() +
+  geom_line(aes(y = exp(pred)),
+            col = 2) +
+  geom_line(data = dat %>%
+              filter(Ps %in% ell_1),
+            aes(y = exp(pred)),
+            col = 4) +
+  xlab("Trial") +
+  ylab("Score") +
+  facet_wrap(~ Ps)
+```
+
+Clustering.
+
+```{r}
+ran_dist <- dist(ran[,1:2])
+ran_clust <- hclust(ran_dist, method = "ward.D2")
+clus2 <- cutree(ran_clust, 2)
+cols <- gg_color_hue(2)
+
+plot(as.phylo(ran_clust), type = "fan",
+     tip.color = cols[clus2],
+     font = 1,
+     edge.width = .7)
+
+dat$cluster <- dat$Ps
+levels(dat$cluster) <- paste("Cluster", clus2)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .5) +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_smooth(col = 4) +
+  facet_wrap(~ cluster)
+```
+
+Checking Total Within Cluster Sum of Squares for different numbers of clusters.
+
+```{r}
+twss4 <- NULL
+for(i in 1:10) {
+  twss4[i] <- sum(sumPartition(ran[,1:2], cutree(ran_clust, i))[,2])
+}
+
+plot(twss4, type = "b")
+```
+
+### Stopping at trial 10
+
+```{r}
+dat <- read_csv("continuous_censored.csv")
+
+dat$Ps <- as.factor(dat$Ps)
+dat$cens <- ifelse(dat$Score == 60, 0, 1)
+
+dat <- dat %>%
+  filter(Trial <= 10)
+```
+
+```{r, echo = FALSE}
+gen.cens(GA)
+
+fit1 <- gamlss(Surv(time = Score, event = cens, type = "right") ~
+                 Trial + re(random = list(Ps = pdDiag(~ Trial))),
+               sigma.formula = ~ Trial,
+               family = cens(GA),
+               data = dat)
+summary(fit1)
+
+getSmo(fit1)
+```
+
+Diagnostics:
+
+```{r}
+wp(fit1)
+
+ran <- ranef(getSmo(fit1)) %>% as_tibble
+names(ran) <- c("intercept","slope")
+ran$ID <- 1:nrow(ran)
+
+par(mfrow = c(2,2))
+hnp(ran$intercept, scale = TRUE, main = "intercept")
+hnp(ran$slope, scale = TRUE, main = "slope")
+hist(ran$intercept, prob = TRUE, main = "intercept")
+lines(density(ran$intercept))
+curve(dnorm(x, 0, sd(ran$intercept)), add = TRUE, col = 4, lwd = 2)
+hist(ran$slope, prob = TRUE, main = "slope")
+lines(density(ran$slope))
+curve(dnorm(x, 0, sd(ran$slope)), add = TRUE, col = 4, lwd = 2)
+```
+
+Predicted curve:
+
+```{r}
+beta_hat <- coef(fit1)[-length(coef(fit1))]
+V <- vcov(fit1)[1:2,1:2]
+dat_pred <- expand.grid(Trial = seq(1, 12, length = 200)) %>%
+  as_tibble
+X_pred <- model.matrix(~ Trial, data = dat_pred)
+dat_pred$pred <- exp(X_pred %*% beta_hat) %>% as.numeric
+se_pred <- sqrt(diag(X_pred %*% V %*% t(X_pred))) %>% as.numeric
+dat_pred$lower <- exp(X_pred %*% beta_hat + qnorm(.025) * se_pred) %>% as.numeric
+dat_pred$upper <- exp(X_pred %*% beta_hat + qnorm(.975) * se_pred) %>% as.numeric
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .2) +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_line(data = dat_pred, aes(y = pred),
+            col = 4, lwd = 1) +
+  geom_ribbon(data = dat_pred,
+              aes(y = pred, ymin = lower, ymax = upper),
+              fill = 4, alpha = .2)
+```
+
+Individual curves:
+
+```{r}
+dat$pred <- predict(fit1)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line() +
+  geom_line(aes(y = exp(pred)),
+            col = 2) +
+  xlab("Trial") +
+  ylab("Score") +
+  facet_wrap(~ Ps)
+```
+
+Producing ellipsoids.
+
+```{r}
+p <- ran %>%
+  ggplot(aes(x = intercept, y = slope)) +
+  theme_bw() +
+  geom_point(alpha = .5) +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_hline(yintercept = 0, lty = 2) +
+  ggtitle("Random effects per individual",
+          subtitle = "Shaded area represents 95% ellipsoid based on the bivariate normal distribution") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .95,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .90,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .85,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  xlab("Intercept") +
+  ylab("Slope")
+
+build <- ggplot_build(p)$data
+points1 <- build[[1]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+ell1 <- build[[6]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+
+ell_1 <- which(as.logical(1 - point.in.polygon(points1$x, points1$y, ell1$x, ell1$y)))
+
+ell1 <- build[[5]] %>% filter(PANEL == 1) %>% dplyr::select(x,y)
+
+dist_2_points <- function(x1, x2) {
+  return(sqrt(sum((x1 - x2)^2)))    
+}
+
+ell1_centre <- c(mean(ell1$x),mean(ell1$y))
+dist_ell1 <- apply(ell1, 1, function(x) dist_2_points(x, ell1_centre))
+
+a_ell1 <- max(dist_ell1)
+b_ell1 <- min(dist_ell1)
+area_ell1 <- pi * a_ell1 * b_ell1
+axis_ratio_ell1 <- a_ell1 / b_ell1
+ecc_ell1 <- sqrt(1 - b_ell1^2/a_ell1^2)
+```
+
+```{r}
+final_p <- ran %>%
+  ggplot(aes(x = intercept, y = slope)) +
+  theme_bw() +
+  geom_text_repel(data = ran %>%
+                    filter(ID %in% ell_1),
+                  aes(label = ID), force = .25) +
+  geom_point(alpha = .5) +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_hline(yintercept = 0, lty = 2) +
+  ggtitle("Random effects per individual",
+          subtitle = paste0("95% ellipse area = ", round(area_ell1, 3),
+                            "; eccentricity = ", round(ecc_ell1, 3))) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .95,
+               lty = 2, col = 4, type = "norm") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .90,
+               lty = 2, col = 4, type = "norm") +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .85,
+               lty = 2, col = 4, type = "norm") +
+  xlab("Intercept") +
+  ylab("Slope") +
+  labs(caption = "Shaded areas represents 95%, 90% and 85% ellipsoids based on the bivariate normal distribution")
+
+print(final_p)
+
+ggsave("continuous_censored_new_t10.png", dpi = 800, units = "in", w = 6, h = 5)
+```
+
+In blue the individuals with outlying behaviour:
+
+```{r}
+dat$pred <- predict(fit1)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line() +
+  geom_line(aes(y = exp(pred)),
+            col = 2) +
+  geom_line(data = dat %>%
+              filter(Ps %in% ell_1),
+            aes(y = exp(pred)),
+            col = 4) +
+  xlab("Trial") +
+  ylab("Score") +
+  facet_wrap(~ Ps)
+```
+
+Clustering.
+
+```{r}
+ran_dist <- dist(ran[,1:2])
+ran_clust <- hclust(ran_dist, method = "ward.D2")
+clus2 <- cutree(ran_clust, 2)
+cols <- gg_color_hue(2)
+
+plot(as.phylo(ran_clust), type = "fan",
+     tip.color = cols[clus2],
+     font = 1,
+     edge.width = .7)
+
+dat$cluster <- dat$Ps
+levels(dat$cluster) <- paste("Cluster", clus2)
+
+dat %>%
+  ggplot(aes(x = Trial, y = Score)) +
+  theme_bw() +
+  geom_line(aes(group = Ps), alpha = .5) +
+  xlab("Trial") +
+  ylab("Score") +
+  geom_smooth(col = 4) +
+  facet_wrap(~ cluster)
+```
+
+Checking Total Within Cluster Sum of Squares for different numbers of clusters.
+
+```{r}
+twss5 <- NULL
+for(i in 1:10) {
+  twss5[i] <- sum(sumPartition(ran[,1:2], cutree(ran_clust, i))[,2])
+}
+
+plot(twss5, type = "b")
+```
+
+## Figure 2
+
+```{r}
+twss <- tibble(twss = c(twss1, twss2, twss3, twss4, twss5),
+               trials = factor(rep(c("1 - 4","1 - 6","1 - 8","1 - 10","1 - 12"), each = 10), levels = c("1 - 4","1 - 6","1 - 8","1 - 10","1 - 12")),
+               nclust = rep(1:10, 5))
+
+dendro_data_k <- function(hc, k) {
+  
+  hcdata    <-  ggdendro::dendro_data(hc, type = "rectangle")
+  seg       <-  hcdata$segments
+  labclust  <-  cutree(hc, k)[hc$order]
+  segclust  <-  rep(0L, nrow(seg))
+  heights   <-  sort(hc$height, decreasing = TRUE)
+  height    <-  mean(c(heights[k], heights[k - 1L]), na.rm = TRUE)
+  
+  for (i in 1:k) {
+    xi      <-  hcdata$labels$x[labclust == i]
+    idx1    <-  seg$x    >= min(xi) & seg$x    <= max(xi)
+    idx2    <-  seg$xend >= min(xi) & seg$xend <= max(xi)
+    idx3    <-  seg$yend < height
+    idx     <-  idx1 & idx2 & idx3
+    segclust[idx] <- i
+  }
+  
+  idx                    <-  which(segclust == 0L)
+  segclust[idx]          <-  segclust[idx + 1L]
+  hcdata$segments$clust  <-  segclust
+  hcdata$segments$line   <-  as.integer(segclust < 1L)
+  hcdata$labels$clust    <-  labclust
+  
+  hcdata
+}
+
+set_labels_params <- function(nbLabels,
+                              direction = c("tb", "bt", "lr", "rl"),
+                              fan       = FALSE) {
+  if (fan) {
+    angle       <-  360 / nbLabels * 1:nbLabels + 90
+    idx         <-  angle >= 90 & angle <= 270
+    angle[idx]  <-  angle[idx] + 180
+    hjust       <-  rep(0, nbLabels)
+    hjust[idx]  <-  1
+  } else {
+    angle       <-  rep(0, nbLabels)
+    hjust       <-  0
+    if (direction %in% c("tb", "bt")) { angle <- angle + 45 }
+    if (direction %in% c("tb", "rl")) { hjust <- 1 }
+  }
+  list(angle = angle, hjust = hjust, vjust = 0.5)
+}
+
+plot_ggdendro <- function(hcdata,
+                          direction   = c("lr", "rl", "tb", "bt"),
+                          fan         = FALSE,
+                          scale.color = NULL,
+                          branch.size = 1,
+                          label.size  = 3,
+                          nudge.label = 0.01,
+                          expand.y    = 0.1) {
+  
+  direction <- match.arg(direction) # if fan = FALSE
+  ybreaks   <- pretty(segment(hcdata)$y, n = 5)
+  ymax      <- max(segment(hcdata)$y)
+  
+  ## branches
+  p <- ggplot() +
+    geom_segment(data         =  segment(hcdata),
+                 aes(x        =  x,
+                     y        =  y,
+                     xend     =  xend,
+                     yend     =  yend,
+                     colour   =  factor(clust)),
+                 lineend      =  "round",
+                 show.legend  =  FALSE,
+                 size         =  branch.size)
+  
+  ## orientation
+  if (fan) {
+    p <- p +
+      coord_polar(direction = -1) +
+      scale_x_continuous(breaks = NULL,
+                         limits = c(0, nrow(label(hcdata)))) +
+      scale_y_reverse(breaks = ybreaks)
+  } else {
+    p <- p + scale_x_continuous(breaks = NULL)
+    if (direction %in% c("rl", "lr")) {
+      p <- p + coord_flip()
+    }
+    if (direction %in% c("bt", "lr")) {
+      p <- p + scale_y_reverse(breaks = ybreaks)
+    } else {
+      p <- p + scale_y_continuous(breaks = ybreaks)
+      nudge.label <- -(nudge.label)
+    }
+  }
+  
+  # labels
+  labelParams <- set_labels_params(nrow(hcdata$labels), direction, fan)
+  hcdata$labels$angle <- labelParams$angle
+  
+  p <- p +
+    geom_text(data        =  label(hcdata),
+              aes(x       =  x,
+                  y       =  y,
+                  label   =  label,
+                  colour  =  factor(label2),
+                  angle   =  angle),
+              vjust       =  labelParams$vjust,
+              hjust       =  labelParams$hjust,
+              nudge_y     =  ymax * nudge.label,
+              size        =  label.size,
+              show.legend =  FALSE)
+  
+  if (!is.null(scale.color)) {
+    p <- p + scale_color_manual(values = scale.color)
+  }
+  
+  ylim <- -round(ymax * expand.y, 1)
+  p    <- p + expand_limits(y = ylim)
+  
+  p
+}
+
+dend_col <- gg_color_hue(2)
+ddata14 <- dendro_data_k(ran_clust14, 2)
+ddata112 <- dendro_data_k(ran_clust112, 2)
+
+fig2_d <- twss %>%
+  filter(nclust <= 7) %>%
+  ggplot(aes(y = twss, x = nclust)) +
+  theme_bw() +
+  geom_point() +
+  geom_line() +
+  xlab("Number of clusters") +
+  ylab("TWSS") +
+  scale_x_continuous(breaks = 1:7) +
+  facet_wrap(~ trials) +
+  ggtitle("(d)")
+
+ddata14$labels$label2 <- ddata14$labels$clust
+ddata112$labels$label2 <- ddata112$labels$clust
+
+fig2_e <- plot_ggdendro(ddata14,
+              fan = TRUE,
+              label.size = 4.5,
+              expand.y = .1,
+              branch.size = .4) +
+  theme_void() +
+  ggtitle("(e)                      Trials 1 - 4")
+
+fig2_f <- plot_ggdendro(ddata112,
+              fan = TRUE,
+              label.size = 4.5,
+              expand.y = .1,
+              branch.size = .4) +
+  theme_void() +
+  ggtitle("(f)                      Trials 1 - 12")
+```
