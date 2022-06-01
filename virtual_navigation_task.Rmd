@@ -150,7 +150,7 @@ dat %>%
               aes(y = pred, ymin = lower, ymax = upper),
               fill = 4, alpha = .2)
 
-fig2_a <- dat %>%
+fig3_a <- dat %>%
   ggplot(aes(x = Trial, y = Score)) +
   theme_bw() +
   geom_line(aes(group = Ps), alpha = .2) +
@@ -162,7 +162,7 @@ fig2_a <- dat %>%
               aes(y = pred, ymin = lower, ymax = upper),
               fill = 4, alpha = .2) +
   scale_x_continuous(breaks = 1:12) +
-  ggtitle("(a)")
+  ggtitle("(a) Scores over time")
 
 ```
 
@@ -258,9 +258,9 @@ final_p <- ran %>%
 
 print(final_p)
 
-ggsave("continuous_censored_new.png", dpi = 800, units = "in", w = 6, h = 5)
+#ggsave("continuous_censored_new.png", dpi = 800, units = "in", w = 6, h = 5)
 
-fig2_b <- ran %>%
+fig3_b <- ran %>%
   ggplot(aes(x = intercept, y = slope)) +
   theme_bw() +
   geom_text_repel(data = ran %>%
@@ -269,7 +269,7 @@ fig2_b <- ran %>%
   geom_point(alpha = .5) +
   geom_vline(xintercept = 0, lty = 2) +
   geom_hline(yintercept = 0, lty = 2) +
-  ggtitle("(b)",
+  ggtitle("(b) Bivariate ellipsoid",
           subtitle = paste0("95% ellipse area = ", round(area_ell1, 3),
                             "; eccentricity = ", round(ecc_ell1, 3))) +
   stat_ellipse(geom = "polygon", fill = 4,
@@ -331,7 +331,7 @@ dat %>%
   geom_smooth(col = 4) +
   facet_wrap(~ cluster)
 
-fig2_c <- dat %>%
+fig3_c <- dat %>%
   ggplot(aes(x = Trial, y = Score)) +
   theme_bw() +
   geom_line(aes(group = Ps), alpha = .5) +
@@ -340,7 +340,7 @@ fig2_c <- dat %>%
   geom_smooth(col = 4, se = FALSE) +
   facet_wrap(~ cluster) +
   scale_x_continuous(breaks = 1:12) +
-  ggtitle("(c)")
+  ggtitle("(c) Clustering")
 ```
 
 Checking Total Within Cluster Sum of Squares for different numbers of clusters.
@@ -359,7 +359,7 @@ plot(twss1, type = "b")
 ### Stopping at trial 4
 
 ```{r}
-dat <- read_csv("continuous_censored.csv")
+dat <- read_csv("virtual_navigation_task.csv")
 
 dat$Ps <- as.factor(dat$Ps)
 dat$cens <- ifelse(dat$Score == 60, 0, 1)
@@ -519,7 +519,7 @@ final_p <- ran %>%
 
 print(final_p)
 
-ggsave("continuous_censored_new_t4.png", dpi = 800, units = "in", w = 6, h = 5)
+#ggsave("continuous_censored_new_t4.png", dpi = 800, units = "in", w = 6, h = 5)
 ```
 
 In blue the individuals with outlying behaviour:
@@ -582,7 +582,7 @@ plot(twss2, type = "b")
 ### Stopping at trial 6
 
 ```{r}
-dat <- read_csv("continuous_censored.csv")
+dat <- read_csv("virtual_navigation_task.csv")
 
 dat$Ps <- as.factor(dat$Ps)
 dat$cens <- ifelse(dat$Score == 60, 0, 1)
@@ -742,7 +742,7 @@ final_p <- ran %>%
 
 print(final_p)
 
-ggsave("continuous_censored_new_t6.png", dpi = 800, units = "in", w = 6, h = 5)
+#ggsave("continuous_censored_new_t6.png", dpi = 800, units = "in", w = 6, h = 5)
 ```
 
 In blue the individuals with outlying behaviour:
@@ -805,7 +805,7 @@ plot(twss3, type = "b")
 ### Stopping at trial 8
 
 ```{r}
-dat <- read_csv("continuous_censored.csv")
+dat <- read_csv("virtual_navigation_task.csv")
 
 dat$Ps <- as.factor(dat$Ps)
 dat$cens <- ifelse(dat$Score == 60, 0, 1)
@@ -965,7 +965,7 @@ final_p <- ran %>%
 
 print(final_p)
 
-ggsave("continuous_censored_new_t8.png", dpi = 800, units = "in", w = 6, h = 5)
+#ggsave("continuous_censored_new_t8.png", dpi = 800, units = "in", w = 6, h = 5)
 ```
 
 In blue the individuals with outlying behaviour:
@@ -1028,7 +1028,7 @@ plot(twss4, type = "b")
 ### Stopping at trial 10
 
 ```{r}
-dat <- read_csv("continuous_censored.csv")
+dat <- read_csv("virtual_navigation_task.csv")
 
 dat$Ps <- as.factor(dat$Ps)
 dat$cens <- ifelse(dat$Score == 60, 0, 1)
@@ -1188,7 +1188,7 @@ final_p <- ran %>%
 
 print(final_p)
 
-ggsave("continuous_censored_new_t10.png", dpi = 800, units = "in", w = 6, h = 5)
+#ggsave("continuous_censored_new_t10.png", dpi = 800, units = "in", w = 6, h = 5)
 ```
 
 In blue the individuals with outlying behaviour:
@@ -1248,7 +1248,7 @@ for(i in 1:10) {
 plot(twss5, type = "b")
 ```
 
-## Figure 2
+## Figure 3
 
 ```{r}
 twss <- tibble(twss = c(twss1, twss2, twss3, twss4, twss5),
@@ -1376,7 +1376,7 @@ dend_col <- gg_color_hue(2)
 ddata14 <- dendro_data_k(ran_clust14, 2)
 ddata112 <- dendro_data_k(ran_clust112, 2)
 
-fig2_d <- twss %>%
+fig3_d <- twss %>%
   filter(nclust <= 7) %>%
   ggplot(aes(y = twss, x = nclust)) +
   theme_bw() +
@@ -1386,24 +1386,32 @@ fig2_d <- twss %>%
   ylab("TWSS") +
   scale_x_continuous(breaks = 1:7) +
   facet_wrap(~ trials) +
-  ggtitle("(d)")
+  ggtitle("(d) Within cluster sums of squares")
 
 ddata14$labels$label2 <- ddata14$labels$clust
 ddata112$labels$label2 <- ddata112$labels$clust
 
-fig2_e <- plot_ggdendro(ddata14,
+fig3_e <- plot_ggdendro(ddata14,
               fan = TRUE,
               label.size = 4.5,
               expand.y = .1,
               branch.size = .4) +
   theme_void() +
-  ggtitle("(e)                      Trials 1 - 4")
+  ggtitle("(e) Clustering individuals: Trials 1 - 4")
 
-fig2_f <- plot_ggdendro(ddata112,
+fig3_f <- plot_ggdendro(ddata112,
               fan = TRUE,
               label.size = 4.5,
               expand.y = .1,
               branch.size = .4) +
   theme_void() +
-  ggtitle("(f)                      Trials 1 - 12")
+  ggtitle("(f) Clustering individuals: Trials 1 - 12")
+```
+
+```{r}
+# to combine all subparts as one figure
+# library(gridExtra)
+# png("fig3.png", w = 12, h = 12, res = 800, units = "in")
+# grid.arrange(fig3_a, fig3_b, fig3_c, fig3_d, fig3_e, fig3_f, ncol = 2)
+# dev.off()
 ```

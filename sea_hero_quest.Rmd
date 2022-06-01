@@ -222,7 +222,7 @@ for(i in 1:10) {
 plot(twss, type = "b")
 ```
 
-## Figure 3
+## Figure 4
 
 ```{r}
 twss_plot <- tibble(twss = twss,
@@ -348,7 +348,7 @@ plot_ggdendro <- function(hcdata,
 dend_col <- gg_color_hue(4)
 ddata <- dendro_data_k(ran_clust, 4)
 
-fig3_a <- dat %>%
+fig4_a <- dat %>%
   ggplot(aes(x = Trial, colour = Age, fill = Age)) +
   theme_bw() +
   xlab("Trial") +
@@ -358,27 +358,27 @@ fig3_a <- dat %>%
   geom_ribbon(data = dat_pred,
               aes(y = pred, ymin = lower, ymax = upper),
               alpha = .2, col = NA) +
-  ggtitle("(a)")
+  ggtitle("(a) Fitted curves")
 
-fig3_b <- dat %>%
+fig4_b <- dat %>%
   ggplot(aes(x = Trial, y = Score)) +
   theme_bw() +
   geom_line(aes(group = AgePs, colour = Age), alpha = .7) +
   xlab("Trial") +
   ylab("Score") +
   facet_wrap(~ cluster) +
-  ggtitle("(b)")
+  ggtitle("(b) Scores over time separated by cluster")
 
-fig3_c <- plot_ggdendro(ddata,
+fig4_c <- plot_ggdendro(ddata,
               fan = TRUE,
-              label.size = 2,
+              label.size = 1.4,
               expand.y = .1,
               scale.color = c(1,1,dend_col[1],1,dend_col[2],1,1,dend_col[3],dend_col[4]),
               branch.size = .4) +
   theme_void() +
-  ggtitle("(c)")
+  ggtitle("(c) Clustering individuals")
 
-fig3_d <- twss_plot %>%
+fig4_d <- twss_plot %>%
   filter(nclust <= 7) %>%
   ggplot(aes(y = twss, x = nclust)) +
   theme_bw() +
@@ -387,5 +387,13 @@ fig3_d <- twss_plot %>%
   xlab("Number of clusters") +
   ylab("TWSS") +
   scale_x_continuous(breaks = 1:7) +
-  ggtitle("(d)")
+  ggtitle("(d) Within cluster sum of squares")
+```
+
+```{r}
+# to combine all subparts as one figure
+# library(gridExtra)
+# png("fig4.png", w = 12, h = 8, res = 800, units = "in")
+# grid.arrange(fig4_a, fig4_b, fig4_c, fig4_d, ncol = 2)
+# dev.off()
 ```

@@ -468,7 +468,7 @@ final_p <- ran %>%
 
 print(final_p)
 
-ggsave("spaced_massed_new.png", dpi = 800, units = "in", w = 8, h = 5)
+#ggsave("spaced_massed_new.png", dpi = 800, units = "in", w = 8, h = 5)
 ```
 
 ## Comparing observed versus expected frequencies in each quadrant
@@ -606,10 +606,10 @@ plot(twss_massed, type = "b")
 lines(twss_spaced, type = "b", col = 2)
 ```
 
-## Figure 1 parts (a) and (b)
+## Figure 2 parts (a) and (b)
 
 ```{r}
-fig1_a <- dat %>%
+fig2_a <- dat %>%
   ggplot(aes(x = Trial, y = Score/total * 100)) +
   theme_bw() +
   geom_line(aes(group = Ps), alpha = .2) +
@@ -622,9 +622,9 @@ fig1_a <- dat %>%
               aes(y = pred * 100, ymin = lower * 100, ymax = upper * 100),
               fill = 4, alpha = .2) +
   facet_wrap(~ FN) +
-  ggtitle("(a)")
+  ggtitle("(a) Online")
 
-fig1_b <- ran %>%
+fig2_b <- ran %>%
   ggplot(aes(x = intercept, y = slope)) +
   theme_bw() +
   geom_text_repel(data = ran %>%
@@ -636,7 +636,7 @@ fig1_b <- ran %>%
   geom_point(alpha = .5) +
   geom_vline(xintercept = 0, lty = 2) +
   geom_hline(yintercept = 0, lty = 2) +
-  ggtitle("(b)",
+  ggtitle("(b) Online",
           subtitle = paste0("Massed: area = ", round(area_massed, 3),
                         "; eccentricity = ", round(ecc_massed, 3),
                         "\nSpaced: area = ", round(area_spaced, 3),
@@ -650,7 +650,7 @@ fig1_b <- ran %>%
                alpha = .2, level = .85,
                lty = 2, col = 4, type = "norm") +
   facet_wrap(~ FN) +
-  coord_equal() +
+  #coord_equal() +
   xlab("Intercept") +
   ylab("Slope") +
   labs(caption = "Shaded areas represents 95%, 90% and 85% ellipsoids based on the bivariate normal distribution")

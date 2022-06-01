@@ -1,0 +1,45 @@
+---
+title: "Code for Figure 1"
+author: "Examining individual learning patterns using GLMMs"
+date: "Commins et al."
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ggplot2)
+library(ggrepel)
+library(sp)
+
+set.seed(123)
+ran <- tibble(intercept = rnorm(20, 0, 4),
+              slope = rnorm(20, 0, 2),
+              ID = 1:20)
+
+fig1 <- ran %>%
+  ggplot(aes(x = intercept, y = slope)) +
+  theme_bw() +
+  geom_text_repel(aes(label = ID), force = .25) +
+  geom_point(alpha = .5) +
+  geom_vline(xintercept = 0, lty = 2) +
+  geom_hline(yintercept = 0, lty = 2) +
+  stat_ellipse(geom = "polygon", fill = 4,
+               alpha = .2, level = .8,
+               lty = 2, col = 4, type = "norm",
+               segments = 1000) +
+  xlab("Random intercepts") +
+  ylab("Random slopes") +
+  annotate("label", x = 7, y = 3, label = "1st quadrant") +
+  annotate("label", x = -7, y = 3, label = "2nd quadrant") +
+  annotate("label", x = -7, y = -3, label = "3rd quadrant") +
+  annotate("label", x = 7, y = -3, label = "4th quadrant")
+```
+
+```{r}
+# to save figure 1
+# png("fig1.png", w = 6, h = 5, res = 800, units = "in")
+# print(fig1)
+# dev.off()
+```
