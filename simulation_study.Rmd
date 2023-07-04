@@ -1,0 +1,389 @@
+---
+title: "Simulation study"
+author: "Examining individual learning patterns using GLMMs"
+date: "Commins et al."
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(lme4)
+library(gamlss)
+library(ggpubr)
+```
+
+Here we provide all code to carry out the simulation study and reproduce the results presented in the paper.
+
+```{r}
+## helper functions
+sim_binomial <- function(n_participants,
+                         n_trials,
+                         beta = c(-1.22,1.11),
+                         sigma_ranef = sqrt(c(0.46,0.22))) {
+  n <- n_participants * n_trials
+  
+  ## simulating random effects
+  b0 <- rnorm(n_participants, 0, sigma_ranef[1])
+  b1 <- rnorm(n_participants, 0, sigma_ranef[2])
+  b <- as.numeric(t(cbind(b0,b1)))
+  
+  ## setting up dataset
+  dat <- tibble(participant = rep(1:n_participants, each = n_trials),
+                trial = rep(1:n_trials, n_participants))
+  
+  ## calculating participant mean probabilities
+  X <- model.matrix(~ trial, data = dat)
+  X_1 <- model.matrix(~ trial, data = dat %>%
+                        filter(participant == 1))
+  Z <- diag(n_participants) %x% X_1
+  mu <- plogis(X%*%beta + Z%*%b)
+  
+  ## simulating responses
+  y <- rbinom(n, size = 8, prob = mu)
+  
+  ## returning complete dataset
+  return(list(data = dat %>% mutate(y = y,
+                                    participant = as.factor(participant)),
+              ranef = tibble(b0, b1)))
+}
+
+sim_gamma <- function(n_participants,
+                      n_trials,
+                      beta = c(3.60,-0.08),
+                      sigma_ranef,
+                      phi = exp(-0.16)) {
+  n <- n_participants * n_trials
+  
+  ## simulating random effects
+  b0 <- rnorm(n_participants, 0, sigma_ranef[1])
+  b1 <- rnorm(n_participants, 0, sigma_ranef[2])
+  b <- as.numeric(t(cbind(b0,b1)))
+  
+  ## setting up dataset
+  dat <- tibble(participant = rep(1:n_participants, each = n_trials),
+                trial = rep(1:n_trials, n_participants))
+  
+  ## calculating participant mean probabilities
+  X <- model.matrix(~ trial, data = dat)
+  X_1 <- model.matrix(~ trial, data = dat %>%
+                        filter(participant == 1))
+  Z <- diag(n_participants) %x% X_1
+  mu <- exp(X%*%beta + Z%*%b)
+  
+  ## simulating responses
+  y <- rGA(n, mu = mu, sigma = phi)
+  
+  ## returning complete dataset
+  return(list(data = dat %>% mutate(y = y,
+                                    participant = as.factor(participant)),
+              ranef = tibble(b0, b1)))
+}
+
+sim_function <- function(model_family, ...) {
+  result <- switch(model_family,
+                   "binomial" = sim_binomial(...),
+                   "gamma1" = sim_gamma(sigma_ranef = sqrt(c(0.46,0.22)), ...),
+                   "gamma2" = sim_gamma(sigma_ranef = sqrt(c(0.46,0)), ...))
+  return(result)
+}
+
+fit_binomial <- function(data) {
+  model <- glmer(cbind(y, 8 - y) ~ trial + (trial || participant),
+                 family = binomial,
+                 data = data$data) %>% try()
+  return(model)
+}
+
+fit_gamma <- function(data) {
+  model <- glmer(y ~ trial + (trial || participant),
+                 family = Gamma(link = "log"),
+                 data = data$data) %>% try()
+  return(model)
+}
+
+fit_function <- function(model_family, ...) {
+  result <- switch(model_family,
+                   "binomial" = fit_binomial(...),
+                   "gamma1" = fit_gamma(...),
+                   "gamma2" = fit_gamma(...))
+  return(result)
+}
+
+fit_bench_binomial <- function(data) {
+  model <- glm(cbind(y, 8 - y) ~ 0 + participant + trial : participant,
+               family = binomial,
+               data = data$data) %>% try()
+  return(model)
+}
+
+fit_bench_gamma <- function(data) {
+  model <- glm(y ~ 0 + participant + trial : participant,
+               family = Gamma(link = "log"),
+               data = data$data) %>% try()
+  return(model)
+}
+
+fit_benchmark <- function(model_family, ...) {
+  result <- switch(model_family,
+                   "binomial" = fit_bench_binomial(...),
+                   "gamma1" = fit_bench_gamma(...),
+                   "gamma2" = fit_bench_gamma(...))
+  return(result)
+}
+
+get_indpars_glmm <- function(fit) {
+  if(class(fit)[1] == "try-error")
+    return(NA) else return(ranef(fit)$participant)
+}
+
+get_indpars_bench <- function(fit) {
+  if(class(fit)[1] == "try-error")
+    return(NA) else {
+      coef_matrix <- matrix(coef(fit), ncol = 2) %>% scale(., scale = FALSE) %>% as.data.frame
+      return(coef_matrix)
+    }
+}
+
+get_indpars <- function(fit) {
+  model_type <- class(fit)[1]
+  result <- switch(model_type,
+                   "glmerMod" = get_indpars_glmm(fit),
+                   "glm" = get_indpars_bench(fit))
+  return(result)
+}
+
+get_coefs <- function(fit) {
+  if(class(fit)[1] == "try-error")
+    return(NA) else return(fixef(fit))
+}
+
+get_varcomp <- function(fit) {
+  if(class(fit)[1] == "try-error")
+    return(NA) else return(as.numeric(VarCorr(fit)))
+}
+```
+
+```{r}
+## simulation settings
+n_trials <- c("trial4" = 4, "trial8" = 8)
+n_participants <- c("npar20" = 20, "npar40" = 40, "npar80" = 80)
+model_family <- list("binomial", "gamma1", "gamma2")
+n_sim <- 1000
+
+## simulating datasets
+
+## creating empty lists
+sub_datasets <- list(trial4 = list(npar20 = list(),
+                                   npar40 = list(),
+                                   npar80 = list()),
+                     trial8 = list(npar20 = list(),
+                                   npar40 = list(),
+                                   npar80 = list()))
+
+all_models <- all_benchmark <- all_datasets <-
+  all_ind_est_glmm <- all_ind_est_bench <- all_coefs <-
+  mse_glmm <- mse_bench <- bias_coefs <- bias_varcomp <-
+  list(binomial = sub_datasets,
+       gamma1 = sub_datasets,
+       gamma2 = sub_datasets)
+
+## setting true parameter values
+beta <- list(binomial = c(-1.22,1.11),
+             gamma = c(3.60,-0.08))
+
+sigma2 <- list(binomial = c(0.46,0.22),
+               gamma1 = c(0.46,0.22),
+               gamma2 = c(0.46,0))
+
+phi <- exp(-0.16)
+
+## simulating all datasets
+set.seed(2023)
+
+for(i in names(n_participants)) {
+  for(j in names(n_trials)) {
+    for(k in model_family) {
+      for(l in 1:n_sim) {
+        all_datasets[[k]][[j]][[i]][[l]] <- sim_function(model_family = k,
+                                                         n_trials = n_trials[j],
+                                                         n_participants = n_participants[i])
+                                                         
+      }
+    }
+  }
+}
+
+## fitting all models and recovering estimates
+## (takes approximately 35 minutes on an Apple M2 MacBook Pro with 32 GB RAM)
+system.time(
+  for(i in names(n_participants)) {
+    for(j in names(n_trials)) {
+      for(k in model_family) {
+        for(l in 1:n_sim) {
+          all_models[[k]][[j]][[i]][[l]] <- fit_function(model_family = k,
+                                                         data = all_datasets[[k]][[j]][[i]][[l]])
+          all_benchmark[[k]][[j]][[i]][[l]] <- fit_benchmark(model_family = k,
+                                                             data = all_datasets[[k]][[j]][[i]][[l]])
+          all_ind_est_glmm[[k]][[j]][[i]][[l]] <- get_indpars(all_models[[k]][[j]][[i]][[l]])
+          all_ind_est_bench[[k]][[j]][[i]][[l]] <- get_indpars(all_benchmark[[k]][[j]][[i]][[l]])
+          all_coefs[[k]][[j]][[i]][[l]] <- get_coefs(all_models[[k]][[j]][[i]][[l]])
+        }
+      }
+    }
+  }
+)
+```
+
+```{r}
+## comparing with true values
+for(i in names(n_participants)) {
+  for(j in names(n_trials)) {
+    for(k in model_family) {
+      for(l in 1:n_sim) {
+        mse_glmm[[k]][[j]][[i]][[l]] <- apply(
+          all_ind_est_glmm[[k]][[j]][[i]][[l]] - all_datasets[[k]][[j]][[i]][[l]]$ranef,
+          2,
+          function(x) sum(x^2)/length(x))
+        mse_bench[[k]][[j]][[i]][[l]] <- apply(
+          all_ind_est_bench[[k]][[j]][[i]][[l]] - all_datasets[[k]][[j]][[i]][[l]]$ranef,
+          2,
+          function(x) sum(x^2)/length(x))
+        if(k == "binomial") {
+          bias_coefs[[k]][[j]][[i]][[l]] <- (all_coefs[[k]][[j]][[i]][[l]] - beta$binomial)/beta$binomial
+        } else {
+          bias_coefs[[k]][[j]][[i]][[l]] <- (all_coefs[[k]][[j]][[i]][[l]] - beta$gamma)/beta$gamma
+        }
+        if(k == "gamma2") {
+          bias_varcomp[[k]][[j]][[i]][[l]] <- (get_varcomp(all_models[[k]][[j]][[i]][[l]]) - sigma2$gamma2)/c(.46,.001)
+        } else {
+          bias_varcomp[[k]][[j]][[i]][[l]] <- (get_varcomp(all_models[[k]][[j]][[i]][[l]]) - sigma2$gamma1)/sigma2$gamma1
+        }
+      }
+    }
+  }
+}
+
+mse_glmm_summary <- lapply(mse_glmm, function(z)
+  lapply(z, function(y)
+    lapply(y, function(x)
+      colMeans(matrix(unlist(x), ncol = 2), na.rm = TRUE))))
+
+mse_bench_summary <- lapply(mse_bench, function(z)
+  lapply(z, function(y)
+    lapply(y, function(x)
+      colMeans(matrix(unlist(x), ncol = 2), na.rm = TRUE))))
+
+bias_glmm_coefs <- lapply(bias_coefs, function(z)
+  lapply(z, function(y)
+    lapply(y, function(x)
+      colMeans(matrix(unlist(x), ncol = 2), na.rm = TRUE))))
+
+bias_glmm_varcomp <- lapply(bias_varcomp, function(z)
+  lapply(z, function(y)
+    lapply(y, function(x)
+      colMeans(matrix(unlist(x), ncol = 2), na.rm = TRUE))))
+```
+
+```{r}
+## collating all results
+all_summary_glmm <- tibble(fit = rep("GLMM", 18),
+                           model = rep(c("Binomial","Gamma\n(random int. + slopes)","Gamma\n(random int. only)"), each = 6),
+                           n_trials = rep(rep(c("4 trials","8 trials"), each = 3), 3),
+                           n_participants = rep(c(20,40,80), 6))
+all_summary_glm <- tibble(fit = rep("GLM", 18),
+                          model = rep(c("Binomial","Gamma\n(random int. + slopes)","Gamma\n(random int. only)"), each = 6),
+                          n_trials = rep(rep(c("4 trials","8 trials"), each = 3), 3),
+                          n_participants = rep(c(20,40,80), 6))
+
+
+all_summary_glmm <- all_summary_glmm %>%
+  mutate(ranef_intercept = matrix(unlist(mse_glmm_summary), ncol = 2, byrow = TRUE)[,1],
+         ranef_slope = matrix(unlist(mse_glmm_summary), ncol = 2, byrow = TRUE)[,2],
+         coef_intercept = matrix(unlist(bias_glmm_coefs), ncol = 2, byrow = TRUE)[,1],
+         coef_slope = matrix(unlist(bias_glmm_coefs), ncol = 2, byrow = TRUE)[,2],
+         sigma_intercept = matrix(unlist(bias_glmm_varcomp), ncol = 2, byrow = TRUE)[,1],
+         sigma_slope = matrix(unlist(bias_glmm_varcomp), ncol = 2, byrow = TRUE)[,2])
+
+all_summary_glm <- all_summary_glm %>%
+  mutate(ranef_intercept = matrix(unlist(mse_bench_summary), ncol = 2, byrow = TRUE)[,1],
+         ranef_slope = matrix(unlist(mse_bench_summary), ncol = 2, byrow = TRUE)[,2],
+         coef_intercept = rep(NA, 18),
+         coef_slope = rep(NA, 18),
+         sigma_intercept = rep(NA, 18),
+         sigma_slope = rep(NA, 18))
+
+all_summary <- rbind(all_summary_glmm, all_summary_glm)
+```
+
+```{r}
+## visualising
+p1 <- all_summary %>%
+  ggplot(aes(x = n_participants, y = log10(ranef_intercept), colour = fit)) +
+  theme_bw() +
+  geom_point() +
+  geom_line() +
+  facet_wrap(~ n_trials + model) +
+  xlab("Number of participants") +
+  ylab(expression(log[10](MSE))) +
+  scale_color_discrete(name = "Model") +
+  scale_x_continuous(breaks = c(20, 40, 80)) +
+  ggtitle("(a) Individual intercepts")
+
+p2 <- all_summary %>%
+  ggplot(aes(x = n_participants, y = log10(ranef_slope), colour = fit)) +
+  theme_bw() +
+  geom_point() +
+  geom_line() +
+  facet_wrap(~ n_trials + model) +
+  xlab("Number of participants") +
+  ylab(expression(log[10](MSE))) +
+  scale_color_discrete(name = "Model") +
+  scale_x_continuous(breaks = c(20, 40, 80)) +
+  ggtitle("(b) Individual slopes")
+
+p3 <- all_summary %>%
+  filter(fit == "GLMM") %>%
+  pivot_longer(cols = 7:8,
+               names_to = "parameter",
+               values_to = "bias") %>%
+  mutate(parameter = as.factor(parameter),
+         parameter = fct_recode(parameter,
+                                Intercept = "coef_intercept",
+                                Slope = "coef_slope")) %>%
+  ggplot(aes(x = n_participants, y = bias, lty = parameter)) +
+  theme_bw() +
+  geom_point() +
+  geom_line() +
+  facet_wrap(~ n_trials + model) +
+  xlab("Number of participants") +
+  ylab("Mean relative bias") +
+  scale_linetype(name = "Parameter") +
+  scale_x_continuous(breaks = c(20, 40, 80)) +
+  ggtitle("(c) GLMM coefficients")
+
+p4 <- all_summary %>%
+  filter(fit == "GLMM") %>%
+  pivot_longer(cols = 9:10,
+               names_to = "parameter",
+               values_to = "bias") %>%
+  mutate(parameter = as.factor(parameter),
+         parameter = fct_recode(parameter,
+                                Intercept = "sigma_intercept",
+                                Slope = "sigma_slope")) %>%
+  ggplot(aes(x = n_participants, y = bias, lty = parameter)) +
+  theme_bw() +
+  geom_point() +
+  geom_line() +
+  facet_wrap(~ n_trials + model) +
+  xlab("Number of participants") +
+  ylab("Mean relative bias") +
+  scale_linetype(name = "Parameter") +
+  scale_x_continuous(breaks = c(20, 40, 80)) +
+  ggtitle("(d) GLMM variance components")
+
+png("simulation_results.png", w = 12, h = 8, res = 800, units = "in")
+ggarrange(p1, p2, p3, p4, ncol = 2, nrow = 2)
+dev.off()
+```
